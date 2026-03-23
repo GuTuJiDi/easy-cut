@@ -2,16 +2,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // 引入刚刚新建的模块
 mod video_processor;
-use video_processor::{plan_fixed_duration_splits, execute_ffmpeg_split,get_video_duration, SplitTask};
 use std::process::Command;
+use video_processor::{
+    execute_ffmpeg_split, get_video_duration, plan_fixed_duration_splits, SplitTask,
+};
 
 // 定义一个暴露给前端的 Tauri Command
 #[tauri::command]
 async fn check_ffmpeg_status() -> Result<String, String> {
     // 尝试调用本地的 ffmpeg 命令
-    let output = Command::new("ffmpeg")
-        .arg("-version")
-        .output();
+    let output = Command::new("ffmpeg").arg("-version").output();
 
     match output {
         Ok(out) => {
@@ -84,8 +84,13 @@ async fn batch_split_by_duration(
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         // 记得把新接口注册进来！
-        .invoke_handler(tauri::generate_handler![check_ffmpeg_status, split_video, batch_split_by_duration])
+        .invoke_handler(tauri::generate_handler![
+            check_ffmpeg_status,
+            split_video,
+            batch_split_by_duration
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

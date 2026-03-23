@@ -22,7 +22,11 @@ pub fn plan_fixed_duration_splits(
     while current_time < total_duration {
         let remain = total_duration - current_time;
         // 如果剩余时间不够一个切片，就把剩余的作为最后一段
-        let duration = if remain < segment_duration { remain } else { segment_duration };
+        let duration = if remain < segment_duration {
+            remain
+        } else {
+            segment_duration
+        };
 
         tasks.push(SplitTask {
             start_time: current_time,
@@ -37,16 +41,17 @@ pub fn plan_fixed_duration_splits(
 }
 
 /// 底层执行层：解耦后的纯函数，不依赖 Tauri 的 #[tauri::command]
-pub fn execute_ffmpeg_split(
-    input_path: &str,
-    task: &SplitTask,
-) -> Result<String, String> {
+pub fn execute_ffmpeg_split(input_path: &str, task: &SplitTask) -> Result<String, String> {
     let output = Command::new("ffmpeg")
         .arg("-y")
-        .arg("-ss").arg(task.start_time.to_string())
-        .arg("-i").arg(input_path)
-        .arg("-t").arg(task.duration.to_string())
-        .arg("-c").arg("copy")
+        .arg("-ss")
+        .arg(task.start_time.to_string())
+        .arg("-i")
+        .arg(input_path)
+        .arg("-t")
+        .arg(task.duration.to_string())
+        .arg("-c")
+        .arg("copy")
         .arg(&task.output_path)
         .output();
 
@@ -62,16 +67,18 @@ pub fn execute_ffmpeg_split(
     }
 }
 
-
 /// 新增：调用 ffprobe 获取视频总时长（秒）
 pub fn get_video_duration(input_path: &str) -> Result<u32, String> {
     // ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 <input>
     let output = Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            input_path
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            input_path,
         ])
         .output();
 
@@ -94,7 +101,6 @@ pub fn get_video_duration(input_path: &str) -> Result<u32, String> {
         Err(e) => Err(format!("无法执行 FFprobe 进程: {}", e)),
     }
 }
-
 
 // ==========================================
 // 测试左移：Bob 的后端单元测试 (Unit Tests)
