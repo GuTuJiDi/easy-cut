@@ -25,12 +25,14 @@
           </div>
 
           <div class="form-group">
-            <label>📁 输出保存目录与命名前缀</label>
+            <label>📁 输出保存目录</label>
             <div class="input-with-btn">
-              <input v-model="batchParams.baseOutputName" type="text" readonly placeholder="请选择保存目录..." />
-              <button class="secondary-btn" @click="selectOutputDir">选择目录</button>
+              <input v-model="batchParams.outputDir" type="text" readonly placeholder="请选择保存目录..." />
+              <button class="secondary-btn" @click="selectOutputDir">更改目录</button>
             </div>
-            <span class="hint">例如选择 D:\Video，系统将生成 D:\Video\源文件名_part1.mp4</span>
+            <span class="hint" v-if="batchParams.videoName && batchParams.outputDir">
+              预期生成: {{ batchParams.outputDir }}\<b>{{ batchParams.videoName }}</b>\{{ batchParams.videoName }}_part1.mp4
+            </span>
           </div>
 
           <div class="form-group">
@@ -49,8 +51,17 @@
             {{ isProcessing ? '引擎全速处理中...' : '🚀 开始批量分割' }}
           </button>
 
-          <div v-if="resultLog" :class="['result-box', isError ? 'error' : 'success']">
-            <pre>{{ resultLog }}</pre>
+          <div v-if="resultLogs.length > 0" :class="['result-box', isError ? 'error' : 'success']">
+            <div class="result-header">
+              <span>🎉 批量分割任务完成！(共 {{ resultLogs.length }} 段)</span>
+              <button class="text-btn" @click="isExpanded = !isExpanded" v-if="resultLogs.length > 5">
+                {{ isExpanded ? '收起列表' : '展开全部' }}
+              </button>
+            </div>
+            <ul class="log-list">
+              <li v-for="(log, index) in visibleLogs" :key="index">{{ log }}</li>
+              <li v-if="!isExpanded && resultLogs.length > 5" class="ellipsis">... 还有 {{ resultLogs.length - 5 }} 个片段被隐藏 ...</li>
+            </ul>
           </div>
         </div>
       </div>
@@ -59,93 +70,78 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
+import {ref, reactive, computed} from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog'; // <--- 引入 dialog 插件
 // 状态管理
 const isProcessing = ref(false);
-const resultLog = ref('');
+const resultLogs = ref<string[]>([]); // 改为数组，方便渲染折叠列表
 const isError = ref(false);
-
+const isExpanded = ref(false); // 控制是否展开长列表
 // 表单数据绑定
 const batchParams = reactive({
   inputPath: '',
-  baseOutputName: '',
-  segmentDuration: 300 // 默认 300 秒 (5分钟)
+  outputDir: '',
+  videoName: '', // 纯视频名称（如：20231024.先导片）
+  segmentDuration: 300
 });
+const visibleLogs = computed(() => {
+  return isExpanded.value ? resultLogs.value : resultLogs.value.slice(0, 5);
+});
+async function selectInputFile() {
+  const selected = await open({
+    multiple: false,
+    filters: [{ name: 'Video Files', extensions: ['mp4', 'mkv', 'mov'] }]
+  });
 
+  if (selected && typeof selected === 'string') {
+    batchParams.inputPath = selected;
+
+    // 智能解析路径 (兼容 Windows \ 和 Mac/Linux /)
+    const normalizedPath = selected.replace(/\\/g, '/');
+    const pathParts = normalizedPath.split('/');
+    const fileNameWithExt = pathParts.pop() || '';
+
+    // 提取纯名称 (去掉 .mp4)
+    const dotIndex = fileNameWithExt.lastIndexOf('.');
+    batchParams.videoName = dotIndex > -1 ? fileNameWithExt.substring(0, dotIndex) : fileNameWithExt;
+
+    // 默认输出目录设为原视频所在目录
+    batchParams.outputDir = pathParts.join(navigator.platform.includes('Win') ? '\\' : '/');
+  }
+}
+
+async function selectOutputDir() {
+  const selected = await open({ directory: true, multiple: false });
+  if (selected && typeof selected === 'string') {
+    batchParams.outputDir = selected;
+  }
+}
 // 触发后端切割任务
 async function runBatchSplit() {
-  // 基础校验
-  if (!batchParams.inputPath || !batchParams.baseOutputName || !batchParams.segmentDuration) {
-    resultLog.value = "⚠️ 请填写完整的路径和时长参数！";
-    isError.value = true;
-    return;
-  }
-
+  if (!batchParams.inputPath || !batchParams.outputDir) return;
   isProcessing.value = true;
-  resultLog.value = '';
+  resultLogs.value = [];
   isError.value = false;
+  isExpanded.value = false; // 每次执行重置折叠状态
 
   try {
-    // 调用 Bob 刚写好的闭环接口
     const result = await invoke<string>('batch_split_by_duration', {
       inputPath: batchParams.inputPath,
-      baseOutputName: batchParams.baseOutputName,
+      outputDir: batchParams.outputDir,
+      videoName: batchParams.videoName,
       segmentDuration: batchParams.segmentDuration
     });
-
-    // 成功后展示日志
-    resultLog.value = `🎉 批量分割任务完成！\n\n${result}`;
+    // 按行拆分后端返回的日志
+    resultLogs.value = result.split('\n');
   } catch (error) {
-    // 捕获后端的 Err 返回
-    resultLog.value = `❌ 发生错误:\n${error}`;
+    resultLogs.value = [`❌ 发生错误: ${error}`];
     isError.value = true;
   } finally {
     isProcessing.value = false;
   }
 }
 
-// 新增：选择原视频文件
-async function selectInputFile() {
-  const selected = await open({
-    multiple: false,
-    filters: [{
-      name: 'Video Files',
-      extensions: ['mp4', 'mkv', 'mov', 'avi']
-    }]
-  });
-
-  if (selected && typeof selected === 'string') {
-    batchParams.inputPath = selected;
-
-    // 智能推导：自动将输出目录设置在原视频的同一文件夹下
-    // 获取最后一个斜杠前面的路径作为默认输出目录
-    const lastSlashIndex = Math.max(selected.lastIndexOf('\\'), selected.lastIndexOf('/'));
-    if (lastSlashIndex > -1) {
-      const dirPath = selected.substring(0, lastSlashIndex);
-      // 提取纯文件名（不带后缀）
-      const fileNameStr = selected.substring(lastSlashIndex + 1);
-      const dotIndex = fileNameStr.lastIndexOf('.');
-      const pureName = dotIndex > -1 ? fileNameStr.substring(0, dotIndex) : fileNameStr;
-
-      batchParams.baseOutputName = `${dirPath}\\${pureName}_切割输出`;
-    }
-  }
-}
-
-// 新增：手动选择输出目录
-async function selectOutputDir() {
-  const selected = await open({
-    directory: true, // 开启目录选择模式
-    multiple: false,
-  });
-
-  if (selected && typeof selected === 'string') {
-    // 这里的推导可以做得更精细，暂且简单拼接一个前缀
-    batchParams.baseOutputName = `${selected}\\EasyCut_Part`;
-  }
-}
 </script>
 
 <style scoped>
@@ -333,5 +329,36 @@ async function selectOutputDir() {
 }
 .secondary-btn:hover {
   background-color: #d1d5db;
+}
+
+/* 补充折叠列表的样式 */
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+}
+.text-btn {
+  background: none;
+  border: none;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0;
+}
+.text-btn:hover { text-decoration: underline; }
+.log-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-family: monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.ellipsis {
+  color: #6b7280;
+  font-style: italic;
+  margin-top: 0.5rem;
 }
 </style>
