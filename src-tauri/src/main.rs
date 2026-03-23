@@ -26,10 +26,39 @@ async fn check_ffmpeg_status() -> Result<String, String> {
     }
 }
 
+// ===  新增的核心切割逻辑 ===
+#[tauri::command]
+async fn split_video(
+    input_path: String,
+    output_path: String,
+    start_time: String,
+    duration: String,
+) -> Result<String, String> {
+    let output = Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-ss").arg(&start_time)
+        .arg("-i").arg(&input_path)
+        .arg("-t").arg(&duration)
+        .arg("-c").arg("copy")       // 无损核心参数
+        .output();
+
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                Ok(format!("视频分割成功！已保存至: {}", output_path))
+            } else {
+                let err_msg = String::from_utf8_lossy(&out.stderr);
+                Err(format!("分割失败: {}", err_msg))
+            }
+        }
+        Err(e) => Err(format!("无法执行 FFmpeg 进程: {}", e)),
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         // 注册刚刚编写的命令
-        .invoke_handler(tauri::generate_handler![check_ffmpeg_status])
+        .invoke_handler(tauri::generate_handler![check_ffmpeg_status,split_video])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
