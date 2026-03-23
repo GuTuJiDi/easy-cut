@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // 引入刚刚新建的模块
 mod video_processor;
-use video_processor::{plan_fixed_duration_splits, execute_ffmpeg_split, SplitTask};
+use video_processor::{plan_fixed_duration_splits, execute_ffmpeg_split,get_video_duration, SplitTask};
 use std::process::Command;
 
 // 定义一个暴露给前端的 Tauri Command
@@ -49,10 +49,43 @@ async fn split_video(
     // 调用解耦后的底层函数
     execute_ffmpeg_split(&input_path, &task)
 }
+/// 新增：打通闭环的业务接口 —— 按固定时长批量分割视频
+#[tauri::command]
+async fn batch_split_by_duration(
+    input_path: String,
+    base_output_name: String, // 比如 "D:\Desktop\先导片"，代码会自动加上 _part1.mp4
+    segment_duration: u32,    // 每段时长（秒），比如 30
+) -> Result<String, String> {
+    println!("开始分析视频: {}", input_path);
+
+    // 第一步：获取总时长
+    let total_duration = match get_video_duration(&input_path) {
+        Ok(d) => d,
+        Err(e) => return Err(e),
+    };
+    println!("视频总时长: {} 秒", total_duration);
+
+    // 第二步：规划分割任务队列 (之前写的纯逻辑运算)
+    let tasks = plan_fixed_duration_splits(total_duration, segment_duration, &base_output_name);
+    println!("规划完毕，共需分割为 {} 段", tasks.len());
+
+    // 第三步：循环执行底层 FFmpeg 切割
+    let mut success_logs = Vec::new();
+    for task in tasks {
+        match execute_ffmpeg_split(&input_path, &task) {
+            Ok(out_path) => success_logs.push(format!("✅ 生成: {}", out_path)),
+            Err(e) => return Err(format!("❌ 切割 {} 失败: {}", task.output_path, e)),
+        }
+    }
+
+    // 全部成功后，返回汇总日志给前端
+    Ok(success_logs.join("\n"))
+}
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![check_ffmpeg_status, split_video])
+        // 记得把新接口注册进来！
+        .invoke_handler(tauri::generate_handler![check_ffmpeg_status, split_video, batch_split_by_duration])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

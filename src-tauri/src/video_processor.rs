@@ -62,6 +62,40 @@ pub fn execute_ffmpeg_split(
     }
 }
 
+
+/// 新增：调用 ffprobe 获取视频总时长（秒）
+pub fn get_video_duration(input_path: &str) -> Result<u32, String> {
+    // ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 <input>
+    let output = Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            input_path
+        ])
+        .output();
+
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                // ffprobe 返回的是带小数点的字符串，比如 "115.320000"
+                let duration_str = String::from_utf8_lossy(&out.stdout);
+
+                // 解析为浮点数并四舍五入为 u32 秒
+                match duration_str.trim().parse::<f64>() {
+                    Ok(f) => Ok(f.round() as u32),
+                    Err(_) => Err("无法解析视频时长数据".to_string()),
+                }
+            } else {
+                let err_msg = String::from_utf8_lossy(&out.stderr);
+                Err(format!("FFprobe 分析失败: {}", err_msg))
+            }
+        }
+        Err(e) => Err(format!("无法执行 FFprobe 进程: {}", e)),
+    }
+}
+
+
 // ==========================================
 // 测试左移：Bob 的后端单元测试 (Unit Tests)
 // ==========================================
