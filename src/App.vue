@@ -17,22 +17,20 @@
 
         <div class="card-body">
           <div class="form-group">
-            <label>🎬 输入视频绝对路径</label>
-            <input
-                v-model="batchParams.inputPath"
-                type="text"
-                placeholder="例如: D:\Videos\source.mp4"
-            />
+            <label>🎬 输入视频文件</label>
+            <div class="input-with-btn">
+              <input v-model="batchParams.inputPath" type="text" readonly placeholder="请选择需要分割的视频..." />
+              <button class="secondary-btn" @click="selectInputFile">浏览文件</button>
+            </div>
           </div>
 
           <div class="form-group">
-            <label>📁 输出基础路径与命名前缀</label>
-            <input
-                v-model="batchParams.baseOutputName"
-                type="text"
-                placeholder="例如: D:\Videos\Output\clip"
-            />
-            <span class="hint">系统将自动在末尾追加 _part1.mp4, _part2.mp4...</span>
+            <label>📁 输出保存目录与命名前缀</label>
+            <div class="input-with-btn">
+              <input v-model="batchParams.baseOutputName" type="text" readonly placeholder="请选择保存目录..." />
+              <button class="secondary-btn" @click="selectOutputDir">选择目录</button>
+            </div>
+            <span class="hint">例如选择 D:\Video，系统将生成 D:\Video\源文件名_part1.mp4</span>
           </div>
 
           <div class="form-group">
@@ -63,7 +61,7 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-
+import { open } from '@tauri-apps/plugin-dialog'; // <--- 引入 dialog 插件
 // 状态管理
 const isProcessing = ref(false);
 const resultLog = ref('');
@@ -105,6 +103,47 @@ async function runBatchSplit() {
     isError.value = true;
   } finally {
     isProcessing.value = false;
+  }
+}
+
+// 新增：选择原视频文件
+async function selectInputFile() {
+  const selected = await open({
+    multiple: false,
+    filters: [{
+      name: 'Video Files',
+      extensions: ['mp4', 'mkv', 'mov', 'avi']
+    }]
+  });
+
+  if (selected && typeof selected === 'string') {
+    batchParams.inputPath = selected;
+
+    // 智能推导：自动将输出目录设置在原视频的同一文件夹下
+    // 获取最后一个斜杠前面的路径作为默认输出目录
+    const lastSlashIndex = Math.max(selected.lastIndexOf('\\'), selected.lastIndexOf('/'));
+    if (lastSlashIndex > -1) {
+      const dirPath = selected.substring(0, lastSlashIndex);
+      // 提取纯文件名（不带后缀）
+      const fileNameStr = selected.substring(lastSlashIndex + 1);
+      const dotIndex = fileNameStr.lastIndexOf('.');
+      const pureName = dotIndex > -1 ? fileNameStr.substring(0, dotIndex) : fileNameStr;
+
+      batchParams.baseOutputName = `${dirPath}\\${pureName}_切割输出`;
+    }
+  }
+}
+
+// 新增：手动选择输出目录
+async function selectOutputDir() {
+  const selected = await open({
+    directory: true, // 开启目录选择模式
+    multiple: false,
+  });
+
+  if (selected && typeof selected === 'string') {
+    // 这里的推导可以做得更精细，暂且简单拼接一个前缀
+    batchParams.baseOutputName = `${selected}\\EasyCut_Part`;
   }
 }
 </script>
@@ -269,5 +308,30 @@ async function runBatchSplit() {
   background-color: #fef2f2;
   border: 1px solid #fecaca;
   color: #991b1b;
+}
+
+/* 在之前的样式底部追加 */
+.input-with-btn {
+  display: flex;
+  gap: 10px;
+}
+.input-with-btn input {
+  flex: 1;
+  background-color: #f9fafb; /* 只读状态的底色 */
+  cursor: not-allowed;
+}
+.secondary-btn {
+  padding: 0 1rem;
+  background-color: #e5e7eb;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.secondary-btn:hover {
+  background-color: #d1d5db;
 }
 </style>
