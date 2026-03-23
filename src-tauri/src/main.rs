@@ -6,6 +6,8 @@ use std::process::Command;
 use video_processor::{
     execute_ffmpeg_split, get_video_duration, plan_fixed_duration_splits, SplitTask,
 };
+use std::path::Path;
+use std::fs;
 
 // 定义一个暴露给前端的 Tauri Command
 #[tauri::command]
@@ -53,7 +55,9 @@ async fn split_video(
 #[tauri::command]
 async fn batch_split_by_duration(
     input_path: String,
-    base_output_name: String, // 比如 "D:\Desktop\先导片"，代码会自动加上 _part1.mp4
+    // base_output_name: String, // 比如 "D:\Desktop\先导片"，代码会自动加上 _part1.mp4
+    output_dir: String,  //只接收目录路径
+    video_name: String, //视频基础名称，不带扩展名
     segment_duration: u32,    // 每段时长（秒），比如 30
 ) -> Result<String, String> {
     println!("开始分析视频: {}", input_path);
@@ -65,11 +69,20 @@ async fn batch_split_by_duration(
     };
     println!("视频总时长: {} 秒", total_duration);
 
-    // 第二步：规划分割任务队列 (之前写的纯逻辑运算)
-    let tasks = plan_fixed_duration_splits(total_duration, segment_duration, &base_output_name);
-    println!("规划完毕，共需分割为 {} 段", tasks.len());
+    // 2. 动态创建专属文件夹: D:\Desktop\jianji\20231024.先导片
+    let target_folder = Path::new(&output_dir).join(&video_name);
+    if !target_folder.exists() {
+        if let Err(e) = fs::create_dir_all(&target_folder) {
+            return Err(format!("创建专属输出目录失败: {}", e));
+        }
+    }
 
-    // 第三步：循环执行底层 FFmpeg 切割
+    // 3. 构建任务并指定最终的输出基础路径
+    // base_name 会变成: D:\Desktop\jianji\20231024.先导片\20231024.先导片
+    let base_name = target_folder.join(&video_name).to_string_lossy().to_string();
+    let tasks = plan_fixed_duration_splits(total_duration, segment_duration, &base_name);
+
+    // 4. 循环执行切割
     let mut success_logs = Vec::new();
     for task in tasks {
         match execute_ffmpeg_split(&input_path, &task) {
@@ -78,7 +91,6 @@ async fn batch_split_by_duration(
         }
     }
 
-    // 全部成功后，返回汇总日志给前端
     Ok(success_logs.join("\n"))
 }
 
