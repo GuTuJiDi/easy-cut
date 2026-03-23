@@ -1,39 +1,62 @@
 <template>
-  <div class="container">
-    <h1>易剪 (EasyCut) V1.0 </h1>
-    <div class="section">
-      <button @click="testEngine">1. 检测底层切割引擎</button>
-      <p v-if="engineStatus" class="status">{{ engineStatus }}</p>
-    </div>
-    <hr>
-    <div class="section">
-      <h3>2. 无损视频分割</h3>
-      <div class="form-group">
-        <label>输入视频绝对路径:</label>
-        <input v-model="splitParams.input" type="text" placeholder="例如: D:\test.mp4" />
+  <div class="app-container">
+    <header class="header">
+      <div class="logo">✂️</div>
+      <div class="title-area">
+        <h1>易剪 (EasyCut)</h1>
+        <p class="subtitle">极速无损视频处理引擎 v1.0</p>
       </div>
-      <div class="form-group">
-        <label>输出视频绝对路径:</label>
-        <input v-model="splitParams.output" type="text" placeholder="例如: D:\output.mp4" />
-      </div>
-      <div class="form-group row">
-        <div>
-          <label>起始时间 (秒):</label>
-          <input v-model="splitParams.startTime" type="text" placeholder="0" />
-        </div>
-        <div>
-          <label>截取时长 (秒):</label>
-          <input v-model="splitParams.duration" type="text" placeholder="15" />
-        </div>
-      </div>
+    </header>
 
-      <button @click="runSplitTask" :disabled="isProcessing">
-        {{ isProcessing ? '处理中...' : '执行分割' }}
-      </button>
-      <p v-if="splitResult" :class="{status: true, error: isError ,success: !isError}">
-        {{ splitResult }}
-      </p>
-    </div>
+    <main class="main-content">
+      <div class="card">
+        <div class="card-header">
+          <h2>⏱️ 固定时长批量分割</h2>
+          <p>将长视频按设定的时间（如每 5 分钟）切分成多个无损片段。</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-group">
+            <label>🎬 输入视频绝对路径</label>
+            <input
+                v-model="batchParams.inputPath"
+                type="text"
+                placeholder="例如: D:\Videos\source.mp4"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>📁 输出基础路径与命名前缀</label>
+            <input
+                v-model="batchParams.baseOutputName"
+                type="text"
+                placeholder="例如: D:\Videos\Output\clip"
+            />
+            <span class="hint">系统将自动在末尾追加 _part1.mp4, _part2.mp4...</span>
+          </div>
+
+          <div class="form-group">
+            <label>⏳ 每个片段时长 (秒)</label>
+            <input
+                v-model.number="batchParams.segmentDuration"
+                type="number"
+                min="1"
+                placeholder="例如: 300"
+            />
+            <span class="hint">当前设置: {{ (batchParams.segmentDuration / 60).toFixed(1) }} 分钟 / 段</span>
+          </div>
+
+          <button class="primary-btn" @click="runBatchSplit" :disabled="isProcessing">
+            <span v-if="isProcessing" class="spinner">⚙️</span>
+            {{ isProcessing ? '引擎全速处理中...' : '🚀 开始批量分割' }}
+          </button>
+
+          <div v-if="resultLog" :class="['result-box', isError ? 'error' : 'success']">
+            <pre>{{ resultLog }}</pre>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 </template>
 
@@ -41,50 +64,44 @@
 import { ref, reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 
-const engineStatus = ref('');
-
-async function testEngine() {
-  try {
-    // 调用 Rust 后端的 check_ffmpeg_status 方法
-    const result = await invoke<string>('check_ffmpeg_status');
-    engineStatus.value = `✅ ${result}`;
-  } catch (error) {
-    engineStatus.value = `❌ 错误: ${error}`;
-  }
-}
-// Charlie 新增的前端逻辑
+// 状态管理
 const isProcessing = ref(false);
-const splitResult = ref('');
+const resultLog = ref('');
 const isError = ref(false);
 
-const splitParams = reactive({
-  input: '',
-  output: '',
-  startTime: '0',
-  duration: '15'
+// 表单数据绑定
+const batchParams = reactive({
+  inputPath: '',
+  baseOutputName: '',
+  segmentDuration: 300 // 默认 300 秒 (5分钟)
 });
 
-async function runSplitTask() {
-  if (!splitParams.input || !splitParams.output) {
-    splitResult.value = "请填写完整的路径！";
+// 触发后端切割任务
+async function runBatchSplit() {
+  // 基础校验
+  if (!batchParams.inputPath || !batchParams.baseOutputName || !batchParams.segmentDuration) {
+    resultLog.value = "⚠️ 请填写完整的路径和时长参数！";
     isError.value = true;
     return;
   }
+
   isProcessing.value = true;
-  splitResult.value = '';
+  resultLog.value = '';
   isError.value = false;
 
   try {
-    // 调用 Bob 开发的接口
-    const result = await invoke<string>('split_video', {
-      inputPath: splitParams.input,
-      outputPath: splitParams.output,
-      startTime: splitParams.startTime,
-      duration: splitParams.duration
+    // 调用 Bob 刚写好的闭环接口
+    const result = await invoke<string>('batch_split_by_duration', {
+      inputPath: batchParams.inputPath,
+      baseOutputName: batchParams.baseOutputName,
+      segmentDuration: batchParams.segmentDuration
     });
-    splitResult.value = `✅ ${result}`;
+
+    // 成功后展示日志
+    resultLog.value = `🎉 批量分割任务完成！\n\n${result}`;
   } catch (error) {
-    splitResult.value = `❌ ${error}`;
+    // 捕获后端的 Err 返回
+    resultLog.value = `❌ 发生错误:\n${error}`;
     isError.value = true;
   } finally {
     isProcessing.value = false;
@@ -93,17 +110,164 @@ async function runSplitTask() {
 </script>
 
 <style scoped>
-/* 简单的样式保持不变 */
-.container { padding: 20px; font-family: sans-serif; max-width: 600px; margin: 0 auto; }
-.section { margin-bottom: 20px; }
-.form-group { display: flex; flex-direction: column; margin-bottom: 10px; }
-.form-group.row { flex-direction: row; gap: 10px; }
-.form-group.row > div { flex: 1; display: flex; flex-direction: column; }
-input { padding: 6px; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; }
-button { padding: 8px 16px; background-color: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; }
-button:disabled { background-color: #9ca3af; }
-hr { margin: 20px 0; border-top: 1px solid #eee; }
-.status { margin-top: 10px; padding: 10px; border-radius: 4px; background: #f0f0f0;}
-.success { background-color: #dcfce7; color: #166534; }
-.error { background-color: #fee2e2; color: #991b1b; }
+/* ===== 现代化 UI 样式定义 ===== */
+.app-container {
+  min-height: 100vh;
+  background-color: #f3f4f6;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  color: #1f2937;
+  padding: 2rem;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.logo {
+  font-size: 2.5rem;
+}
+
+.title-area h1 {
+  margin: 0;
+  font-size: 1.8rem;
+  color: #111827;
+}
+
+.subtitle {
+  margin: 0;
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+.main-content {
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+.card {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+
+.card-header {
+  background-color: #f9fafb;
+  padding: 1.5rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.card-header h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.25rem;
+  color: #374151;
+}
+
+.card-header p {
+  margin: 0;
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+.card-body {
+  padding: 1.5rem;
+}
+
+.form-group {
+  margin-bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.form-group label {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: #374151;
+  font-size: 0.95rem;
+}
+
+.form-group input {
+  padding: 0.75rem 1rem;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: all 0.2s;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+}
+
+.hint {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  margin-top: 0.4rem;
+}
+
+.primary-btn {
+  width: 100%;
+  padding: 0.875rem;
+  background-color: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background-color: #1d4ed8;
+}
+
+.primary-btn:disabled {
+  background-color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  100% { transform: rotate(360deg); }
+}
+
+.result-box {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border-radius: 8px;
+  font-family: monospace;
+  font-size: 0.9rem;
+  overflow-x: auto;
+}
+
+.result-box pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.success {
+  background-color: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+
+.error {
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
 </style>
