@@ -34,12 +34,14 @@ async fn split_video(
     start_time: String,
     duration: String,
 ) -> Result<String, String> {
+    // 补齐了最后一个 arg(&output_path)
     let output = Command::new("ffmpeg")
         .arg("-y")
         .arg("-ss").arg(&start_time)
         .arg("-i").arg(&input_path)
         .arg("-t").arg(&duration)
-        .arg("-c").arg("copy")       // 无损核心参数
+        .arg("-c").arg("copy")
+        .arg(&output_path) // <-- 就是漏了这一行！把输出路径传给 FFmpeg
         .output();
 
     match output {
