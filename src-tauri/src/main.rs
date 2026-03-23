@@ -1,6 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
+// 引入刚刚新建的模块
+mod video_processor;
+use video_processor::{plan_fixed_duration_splits, execute_ffmpeg_split, SplitTask};
 use std::process::Command;
 
 // 定义一个暴露给前端的 Tauri Command
@@ -26,41 +28,31 @@ async fn check_ffmpeg_status() -> Result<String, String> {
     }
 }
 
-// ===  新增的核心切割逻辑 ===
 #[tauri::command]
 async fn split_video(
     input_path: String,
-    output_path: String,
+    output_path: String, // 现在前端传过来的可以是基础名称，如 D:\test
     start_time: String,
     duration: String,
 ) -> Result<String, String> {
-    // 补齐了最后一个 arg(&output_path)
-    let output = Command::new("ffmpeg")
-        .arg("-y")
-        .arg("-ss").arg(&start_time)
-        .arg("-i").arg(&input_path)
-        .arg("-t").arg(&duration)
-        .arg("-c").arg("copy")
-        .arg(&output_path) // <-- 就是漏了这一行！把输出路径传给 FFmpeg
-        .output();
+    // 将前端传来的 String 转为 u32，实际开发中这里要加错误处理，暂略
+    let start: u32 = start_time.parse().unwrap_or(0);
+    let dur: u32 = duration.parse().unwrap_or(10);
 
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                Ok(format!("视频分割成功！已保存至: {}", output_path))
-            } else {
-                let err_msg = String::from_utf8_lossy(&out.stderr);
-                Err(format!("分割失败: {}", err_msg))
-            }
-        }
-        Err(e) => Err(format!("无法执行 FFmpeg 进程: {}", e)),
-    }
+    // 组装一个单一任务
+    let task = SplitTask {
+        start_time: start,
+        duration: dur,
+        output_path: output_path,
+    };
+
+    // 调用解耦后的底层函数
+    execute_ffmpeg_split(&input_path, &task)
 }
 
 fn main() {
     tauri::Builder::default()
-        // 注册刚刚编写的命令
-        .invoke_handler(tauri::generate_handler![check_ffmpeg_status,split_video])
+        .invoke_handler(tauri::generate_handler![check_ffmpeg_status, split_video])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
