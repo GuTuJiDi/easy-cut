@@ -6,6 +6,7 @@ use std::process::Command;
 use video_processor::{
     execute_ffmpeg_split, get_video_duration, plan_fixed_duration_splits, SplitTask,
 };
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::fs;
 
@@ -94,6 +95,53 @@ async fn batch_split_by_duration(
     Ok(success_logs.join("\n"))
 }
 
+
+// --- Alice 定义的数据契约 ---
+#[derive(Serialize, Deserialize, Debug)]
+struct Marker {
+    id: String,
+    #[serde(rename = "startTime")] // 兼容前端的驼峰命名
+    start_time: f64,
+    #[serde(rename = "endTime")]
+    end_time: f64,
+    label: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct VideoMarkerData {
+    #[serde(rename = "videoPath")]
+    video_path: String,
+    markers: Vec<Marker>,
+}
+
+// --- Bob 编写的存储接口 ---
+#[tauri::command]
+async fn save_markers(video_path: String, markers: Vec<Marker>) -> Result<String, String> {
+    // 1. 推导 JSON 文件的保存路径
+    let video_p = Path::new(&video_path);
+    let parent_dir = video_p.parent().ok_or("无效的视频路径")?;
+
+    // 获取原视频文件名（不含后缀）
+    let file_stem = video_p.file_stem().ok_or("无法提取文件名")?.to_string_lossy();
+
+    // 拼接成: 目录/原文件名.EasyCut.json
+    let json_filename = format!("{}.EasyCut.json", file_stem);
+    let json_path = parent_dir.join(json_filename);
+
+    // 2. 组装数据并序列化
+    let data = VideoMarkerData { video_path, markers };
+    let json_string = match serde_json::to_string_pretty(&data) {
+        Ok(s) => s,
+        Err(e) => return Err(format!("序列化 JSON 失败: {}", e)),
+    };
+
+    // 3. 写入文件系统
+    match fs::write(&json_path, json_string) {
+        Ok(_) => Ok(json_path.to_string_lossy().into_owned()),
+        Err(e) => Err(format!("写入文件失败: {}", e)),
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -101,7 +149,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             check_ffmpeg_status,
             split_video,
-            batch_split_by_duration
+            batch_split_by_duration,
+            save_markers
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
