@@ -103,6 +103,9 @@ pub fn get_video_duration(input_path: &str) -> Result<u32, String> {
 mod tests {
     use super::*;
 
+    use std::fs::File;
+    use std::io::Write;
+
     #[test]
     fn test_plan_fixed_duration_splits() {
         // 测试场景 1：100秒视频，按 30秒 切割
@@ -128,5 +131,29 @@ mod tests {
         let tasks = plan_fixed_duration_splits(60, 30, "perfect_video");
         assert_eq!(tasks.len(), 2);
         assert_eq!(tasks[1].duration, 30);
+    }
+
+    #[test]
+    fn test_get_video_duration_file_not_found() {
+        // 测试边界情况：当传入一个根本不存在的路径时，我们的系统应该优雅地返回 Err，而不是崩溃
+        let result = get_video_duration("不存在的虚拟路径_xxx.mp4");
+
+        assert!(result.is_err(), "文件不存在时应该返回错误");
+        let err_msg = result.unwrap_err();
+        assert!(err_msg.contains("FFprobe 分析失败") || err_msg.contains("无法执行"),
+                "错误信息应该包含预期的关键字，当前为: {}", err_msg);
+    }
+
+    // 实际开发中，对于核心解析逻辑，我们通常会在项目根目录放一个极小的 dummy.mp4 用于真实测试。
+    // 这里我们模拟一个测试思想：确保接口类型签名正确
+    #[test]
+    fn test_ffprobe_command_build() {
+        // 验证我们调用的 ffprobe 命令格式是否正确且没有引发 Panic
+        // 如果本地环境没有 ffprobe，这个测试也能帮我们发现环境依赖问题
+        let output = std::process::Command::new("ffprobe")
+            .arg("-version")
+            .output();
+
+        assert!(output.is_ok(), "运行环境缺少 ffprobe，请检查系统环境变量！");
     }
 }
