@@ -19,10 +19,11 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri-plugin-opener = "2"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # 引入 tokio 运行时，用于构建高吞吐量的异步视频处理队列
 tokio = { version = "1", features = ["full"] }
 tauri-plugin-dialog = "2"
 # 用于执行本地系统命令 (调用 FFmpeg)
+sha2 = "0.10"  # <--- 新增：用于生成极速视频指纹
