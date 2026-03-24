@@ -2,13 +2,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // 引入刚刚新建的模块
 mod video_processor;
+mod marker_manager;
 use std::process::Command;
 use video_processor::{
     execute_ffmpeg_split, get_video_duration, plan_fixed_duration_splits, SplitTask,
 };
 use std::path::Path;
 use std::fs;
-
+use marker_manager::{Marker, save_markers_logic, load_markers_logic};
+use std::path::PathBuf;
+use tauri::{AppHandle, Manager}; // <--- 引入 AppHandle
 // 定义一个暴露给前端的 Tauri Command
 #[tauri::command]
 async fn check_ffmpeg_status() -> Result<String, String> {
@@ -93,7 +96,36 @@ async fn batch_split_by_duration(
 
     Ok(success_logs.join("\n"))
 }
+/// 辅助函数：获取本软件专属的标记数据存储目录
+fn get_app_marker_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    // 获取标准的 App Local Data 目录
+    let mut data_dir = app.path().app_local_data_dir()
+        .map_err(|_| "无法获取系统应用数据目录".to_string())?;
 
+    // 追加子目录: /Markers
+    data_dir.push("Markers");
+    Ok(data_dir)
+}
+// --- 新增：保存标记 (使用 AppHandle 注入) ---
+#[tauri::command]
+async fn save_markers(
+    app: AppHandle,
+    video_path: String,
+    markers: Vec<Marker>
+) -> Result<String, String> {
+    let storage_dir = get_app_marker_dir(&app)?;
+    save_markers_logic(&storage_dir, &video_path, markers)
+}
+
+// --- 新增：加载标记 (使用 AppHandle 注入) ---
+#[tauri::command]
+async fn load_markers(
+    app: AppHandle,
+    video_path: String
+) -> Result<Vec<Marker>, String> {
+    let storage_dir = get_app_marker_dir(&app)?;
+    load_markers_logic(&storage_dir, &video_path)
+}
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -101,7 +133,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             check_ffmpeg_status,
             split_video,
-            batch_split_by_duration
+            batch_split_by_duration,
+            save_markers,
+            load_markers  //暴漏给前端的加载标记接口
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
