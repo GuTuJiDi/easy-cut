@@ -65,6 +65,65 @@
           </div>
         </div>
       </div>
+      <div class="card" style="margin-top: 2rem;">
+        <div class="card-header">
+          <h2>🏷️ 智能视频打轴与标记</h2>
+          <p>为长视频标记精彩片段，生成专属 JSON 配置，随时可根据标记无损提取。</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-group">
+            <label>🎬 选择要在本软件中预览打轴的视频</label>
+            <div class="input-with-btn">
+              <input v-model="markerParams.videoPath" type="text" readonly placeholder="请选择视频文件..." />
+              <button class="secondary-btn" @click="selectVideoForMarker">加载视频</button>
+            </div>
+          </div>
+
+          <div v-if="markerParams.videoSrc" class="player-section">
+            <video
+                ref="videoPlayerRef"
+                controls
+                class="video-player"
+                :src="markerParams.videoSrc"
+                @timeupdate="onTimeUpdate"
+            ></video>
+
+            <div class="controls-bar">
+              <div class="time-display">
+                当前时间: <span>{{ currentTime.toFixed(2) }} s</span>
+              </div>
+              <div class="action-buttons">
+                <button class="mark-btn in" @click="setInPoint">设置入点 [</button>
+                <button class="mark-btn out" @click="setOutPoint">设置出点 ]</button>
+              </div>
+            </div>
+
+            <div class="draft-marker" v-if="draftMarker.startTime !== null">
+          <span>待添加片段: {{ draftMarker.startTime.toFixed(2) }}s ~
+            {{ draftMarker.endTime !== null ? draftMarker.endTime.toFixed(2) + 's' : '等待打出点...' }}
+          </span>
+              <input v-model="draftMarker.label" type="text" placeholder="输入片段描述 (如: 精彩打斗)" />
+              <button class="primary-btn small" @click="addMarkerToList" :disabled="draftMarker.endTime === null || !draftMarker.label">
+                添加至列表
+              </button>
+            </div>
+          </div>
+
+          <div class="marker-list-section" v-if="markers.length > 0">
+            <h3>已标记片段 ({{ markers.length }})</h3>
+            <ul class="marker-list">
+              <li v-for="(m, index) in markers" :key="m.id">
+                <span class="tag">{{ m.label }}</span>
+                <span class="time">{{ m.startTime.toFixed(1) }}s - {{ m.endTime.toFixed(1) }}s</span>
+                <button class="text-btn danger" @click="removeMarker(index)">删除</button>
+              </li>
+            </ul>
+            <button class="primary-btn" @click="saveMarkersToJSON">💾 保存配置文件 (JSON)</button>
+            <p v-if="saveStatus" class="status-msg">{{ saveStatus }}</p>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
 </template>
@@ -73,6 +132,7 @@
 import {ref, reactive, computed} from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog'; // <--- 引入 dialog 插件
+import { convertFileSrc } from '@tauri-apps/api/core'; // Tauri V2 用来加载本地文件的 API
 // 状态管理
 const isProcessing = ref(false);
 const resultLogs = ref<string[]>([]); // 改为数组，方便渲染折叠列表
@@ -88,6 +148,11 @@ const batchParams = reactive({
 const visibleLogs = computed(() => {
   return isExpanded.value ? resultLogs.value : resultLogs.value.slice(0, 5);
 });
+
+// --- 状态与引用 ---
+const videoPlayerRef = ref<HTMLVideoElement | null>(null);
+const currentTime = ref(0);
+const saveStatus = ref('');
 async function selectInputFile() {
   const selected = await open({
     multiple: false,
@@ -141,7 +206,83 @@ async function runBatchSplit() {
     isProcessing.value = false;
   }
 }
+const markerParams = reactive({
+  videoPath: '',
+  videoSrc: '' // 用于 <video> 标签的协议转换路径
+});
 
+// 标记列表契约
+interface Marker { id: string; startTime: number; endTime: number; label: string; }
+const markers = ref<Marker[]>([]);
+
+// 当前正在打轴的草稿
+const draftMarker = reactive<{ startTime: number | null, endTime: number | null, label: string }>({
+  startTime: null,
+  endTime: null,
+  label: ''
+});
+
+// --- 核心方法 ---
+async function selectVideoForMarker() {
+  const selected = await open({ multiple: false, filters: [{ name: 'Videos', extensions: ['mp4'] }] });
+  if (selected && typeof selected === 'string') {
+    markerParams.videoPath = selected;
+    // Tauri 出于安全限制，Webview 不能直接读 C:\ 盘。必须用 convertFileSrc 转成 asset:// 协议
+    markerParams.videoSrc = convertFileSrc(selected);
+    markers.value = []; // 清空旧列表
+    saveStatus.value = '';
+  }
+}
+
+// 监听视频播放时间变化
+function onTimeUpdate() {
+  if (videoPlayerRef.value) {
+    currentTime.value = videoPlayerRef.value.currentTime;
+  }
+}
+
+function setInPoint() {
+  draftMarker.startTime = currentTime.value;
+  draftMarker.endTime = null; // 重置出点
+}
+
+function setOutPoint() {
+  if (draftMarker.startTime !== null && currentTime.value > draftMarker.startTime) {
+    draftMarker.endTime = currentTime.value;
+  } else {
+    alert("出点必须大于入点！");
+  }
+}
+
+function addMarkerToList() {
+  if (draftMarker.startTime !== null && draftMarker.endTime !== null) {
+    markers.value.push({
+      id: Date.now().toString(),
+      startTime: draftMarker.startTime,
+      endTime: draftMarker.endTime,
+      label: draftMarker.label
+    });
+    // 重置草稿
+    draftMarker.startTime = null; draftMarker.endTime = null; draftMarker.label = '';
+  }
+}
+
+function removeMarker(index: number) {
+  markers.value.splice(index, 1);
+}
+
+// 调用后端接口保存 JSON
+async function saveMarkersToJSON() {
+  try {
+    const jsonPath = await invoke<string>('save_markers', {
+      videoPath: markerParams.videoPath,
+      markers: markers.value
+    });
+    saveStatus.value = `✅ 标记已成功保存至: ${jsonPath}`;
+  } catch (err) {
+    saveStatus.value = `❌ 保存失败: ${err}`;
+  }
+}
 </script>
 
 <style scoped>
@@ -361,4 +502,19 @@ async function runBatchSplit() {
   font-style: italic;
   margin-top: 0.5rem;
 }
+
+/* 简化部分样式展示 */
+.player-section { margin-top: 1rem; background: #000; border-radius: 8px; overflow: hidden; }
+.video-player { width: 100%; max-height: 400px; display: block; }
+.controls-bar { background: #1f2937; padding: 10px; display: flex; justify-content: space-between; align-items: center; color: white; }
+.mark-btn { background: #4b5563; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-left: 8px; }
+.mark-btn:hover { background: #6b7280; }
+.draft-marker { padding: 10px; background: #f3f4f6; display: flex; gap: 10px; align-items: center; }
+.marker-list-section { margin-top: 1.5rem; }
+.marker-list { list-style: none; padding: 0; }
+.marker-list li { display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #e5e7eb; align-items: center; }
+.tag { font-weight: bold; color: #2563eb; }
+.time { color: #6b7280; font-family: monospace; }
+.text-btn.danger { color: #dc2626; }
+.status-msg { margin-top: 10px; font-weight: bold; color: #166534; }
 </style>
