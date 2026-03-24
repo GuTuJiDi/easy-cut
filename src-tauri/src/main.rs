@@ -7,6 +7,7 @@ use std::process::Command;
 use video_processor::{
     execute_ffmpeg_split, get_video_duration, plan_fixed_duration_splits, SplitTask,
 };
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::fs;
 use marker_manager::{Marker, save_markers_logic, load_markers_logic};
