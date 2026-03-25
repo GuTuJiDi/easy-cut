@@ -856,6 +856,7 @@ name = "easy-cut"
 version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",
+ "open",
  "serde",
  "serde_json",
  "sha2",

@@ -28,3 +28,4 @@ tauri-plugin-dialog = "2"
 # 用于执行本地系统命令 (调用 FFmpeg)
 sha2 = "0.10"  # <--- 新增：用于生成极速视频指纹
 dirs = "5" # <--- 新增：用于精准获取操作系统的Documents/Home目录
+open = "5"
