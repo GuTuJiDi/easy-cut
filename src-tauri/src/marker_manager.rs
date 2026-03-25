@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{self,Read};
 use std::path::{Path, PathBuf};
 
 // --- 数据模型 ---
@@ -25,28 +25,50 @@ pub struct VideoMarkerData {
 
 // --- 核心指纹算法 ---
 /// 计算极速视频指纹：取文件大小 + 头部 1MB 数据进行 SHA-256 运算
+// pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
+//     let mut file = File::open(video_path).map_err(|e| format!("无法读取视频文件: {}", e))?;
+//
+//     let metadata = file
+//         .metadata()
+//         .map_err(|e| format!("无法获取视频元数据: {}", e))?;
+//     let file_size = metadata.len();
+//
+//     let mut hasher = Sha256::new();
+//     // 1. 混入文件大小
+//     hasher.update(file_size.to_be_bytes());
+//
+//     // 2. 读取并混入头部最多 1MB 数据
+//     let mut buffer = [0u8; 1024 * 1024]; // 1MB buffer
+//     let bytes_read = file.read(&mut buffer).unwrap_or(0);
+//     hasher.update(&buffer[..bytes_read]);
+//
+//     let result = hasher.finalize();
+//     // 返回 64 位的十六进制字符串作为唯一 ID
+//     Ok(format!("{:x}", result))
+// }
+// src-tauri/src/marker_manager.rs
 pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
-    let mut file = File::open(video_path).map_err(|e| format!("无法读取视频文件: {}", e))?;
+    use std::fs::File;
+    use std::io::Read;
+    use sha2::{Sha256, Digest};
 
-    let metadata = file
-        .metadata()
-        .map_err(|e| format!("无法获取视频元数据: {}", e))?;
-    let file_size = metadata.len();
-
+    let mut file = File::open(video_path).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
-    // 1. 混入文件大小
-    hasher.update(file_size.to_be_bytes());
 
-    // 2. 读取并混入头部最多 1MB 数据
-    let mut buffer = [0u8; 1024 * 1024]; // 1MB buffer
-    let bytes_read = file.read(&mut buffer).unwrap_or(0);
-    hasher.update(&buffer[..bytes_read]);
+    // ❌ 错误写法 (会导致栈溢出):
+    // let mut buffer = [0u8; 1048576];
 
-    let result = hasher.finalize();
-    // 返回 64 位的十六进制字符串作为唯一 ID
-    Ok(format!("{:x}", result))
+    // ✅ 正确写法 (分配到堆内存):
+    let mut buffer = vec![0u8; 1024 * 1024]; // 每次读取 1MB
+
+    loop {
+        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if n == 0 { break; }
+        hasher.update(&buffer[..n]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
 }
-
 // --- 存储业务逻辑 ---
 /// 获取集中存储目录下的专属 JSON 路径
 pub fn get_json_path(storage_dir: &Path, fingerprint: &str) -> PathBuf {

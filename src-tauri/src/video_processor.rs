@@ -163,3 +163,79 @@ mod tests {
         assert!(output.is_ok(), "运行环境缺少 ffprobe，请检查系统环境变量！");
     }
 }
+use crate::marker_manager::Marker;
+use std::path::Path;
+
+// --- 实用工具函数：净化文件名 ---
+// 用户在打标签时可能会输入 \ / : * ? " < > | 等操作系统不允许的字符
+// 这个函数会将这些违规字符统统替换为下划线，防止 FFmpeg 写入硬盘时报错
+fn sanitize_filename(name: &str) -> String {
+    name.replace(&['\\', '/', ':', '*', '?', '"', '<', '>', '|'][..], "_")
+}
+
+// --- 核心魔法：根据标记数组执行连环切割 ---
+pub async fn split_video_by_markers(
+    input_path_str: &str,
+    output_dir_str: &str,
+    markers: Vec<Marker>,
+) -> Result<String, String> {
+    let input_path = Path::new(input_path_str);
+    let out_dir_path = Path::new(output_dir_str);
+
+    // 获取原视频的名称和扩展名 (例如: "先导片", "mp4")
+    let video_stem = input_path.file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let extension = input_path.extension()
+        .unwrap_or(std::ffi::OsStr::new("mp4"))
+        .to_string_lossy();
+
+    // 🏆 体验优化：为本次导出自动创建一个专属的子文件夹，防止切片散落一地污染用户的目录
+    let target_dir = out_dir_path.join(format!("{}_标记导出", video_stem));
+    if let Err(e) = std::fs::create_dir_all(&target_dir) {
+        return Err(format!("无法创建专属输出目录: {}", e));
+    }
+
+    let mut logs = Vec::new();
+    logs.push(format!("🚀 引擎启动：准备处理 {} 个标记片段...", markers.len()));
+
+    for (index, marker) in markers.iter().enumerate() {
+        let duration = marker.end_time - marker.start_time;
+        if duration <= 0.0 {
+            logs.push(format!("⚠️ 跳过无效标记 (时间倒挂或为0): {}", marker.label));
+            continue;
+        }
+
+        // 格式化输出文件名： [01]_原视频名_用户标签.mp4
+        let safe_label = sanitize_filename(&marker.label);
+        let out_file_name = format!("[{:02}]_{}_{}.{}", index + 1, video_stem, safe_label, extension);
+        let out_file_path = target_dir.join(&out_file_name);
+
+        // ⚡ 组装 FFmpeg 极速无损切割指令
+        // 原理科普：-ss 放在 -i 前面是快速定位；-c copy 代表不重新编码，直接拷贝数据流
+        let output = Command::new("ffmpeg")
+            .arg("-y") // 默认覆盖同名文件
+            .arg("-ss")
+            .arg(format!("{:.3}", marker.start_time)) // 精确到毫秒级
+            .arg("-i")
+            .arg(input_path_str)
+            .arg("-t")
+            .arg(format!("{:.3}", duration))
+            .arg("-c")
+            .arg("copy") // 核心：瞬间输出的魔法
+            .arg(out_file_path.to_string_lossy().as_ref())
+            .output()
+            .map_err(|e| format!("FFmpeg 进程启动失败，请检查是否已安装 FFmpeg: {}", e))?;
+
+        if output.status.success() {
+            logs.push(format!("✅ 生成成功: {}", out_file_name));
+        } else {
+            // 如果遇到错误，捕获并记录 FFmpeg 的真实报错信息，方便排查
+            let err_msg = String::from_utf8_lossy(&output.stderr);
+            logs.push(format!("❌ 生成失败 [{}]: {}", out_file_name, err_msg));
+        }
+    }
+
+    logs.push(format!("\n🎉 任务圆满完成！所有片段已保存至:\n{}", target_dir.display()));
+    Ok(logs.join("\n"))
+}

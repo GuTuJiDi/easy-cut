@@ -8,8 +8,11 @@
       <div class="header-actions">
         <div class="input-with-btn">
           <input v-model="videoPath" type="text" readonly placeholder="尚未加载视频..." class="file-input compact" />
-          <button class="primary-btn" @click="selectVideo">
+          <button v-if="!videoSrc" class="primary-btn" @click="selectVideo">
             <span class="icon">📁</span> 加载视频
+          </button>
+          <button v-else class="secondary-btn" @click="closeProject">
+            ✖ 关闭视频
           </button>
         </div>
       </div>
@@ -156,15 +159,20 @@
 
       <div class="card list-card" v-show="!isFullscreen">
         <div class="list-header">
-          <h3 class="list-title">📋 标记列表 ({{ markers.length }})</h3>
+          <h3 class="list-title">📋 标记 ({{ markers.length }})</h3>
           <div class="save-actions">
             <transition name="fade">
-              <span v-if="autoSaveEnabled" class="auto-save-indicator">
-                {{ isAutoSaving ? '☁️ 正在同步...' : (unsavedChanges ? '☁️ 等待保存' : '☁️ 已自动保存') }}
+              <span v-if="settingsStore.autoSave" class="auto-save-indicator" :class="{'saving': isAutoSaving}">
+                {{ isAutoSaving ? '☁️ 同步中...' : (unsavedChanges ? '☁️ 待同步' : '☁️ 已保存') }}
               </span>
             </transition>
-            <button class="save-btn" @click="saveMarkers" :disabled="markers.length === 0" :class="{'pulse': unsavedChanges && !autoSaveEnabled}">
-              💾 {{ autoSaveEnabled ? '手动备份' : '保存 JSON' }}
+
+            <button class="icon-text-btn danger" @click="clearAllMarkers" v-if="markers.length > 0" title="清空并移入回收站">
+              🗑️ 清空
+            </button>
+
+            <button v-if="!settingsStore.autoSave" class="save-btn" @click="saveMarkers" :disabled="markers.length===0" :class="{'pulse': unsavedChanges}">
+              💾 手动保存
             </button>
           </div>
         </div>
@@ -211,6 +219,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'; // <--- 新增 watch
+import { useSettingsStore } from '../stores/settings'; // 引入配置仓库
+const settingsStore = useSettingsStore();
+// --- 撤销 (Undo) 栈 ---
+const deletedHistory = ref<Marker[]>([]);
 // 核心引用
 const videoPath = ref('');
 const videoSrc = ref('');
@@ -264,8 +276,7 @@ const saveStatus = ref('');
 const unsavedChanges = ref(false);
 // --- 新增：自动保存相关状态 ---
 const autoSaveEnabled = ref(true); // 默认假定开启，稍后从后端读取真实配置
-const isAutoSaving = ref(false);
-let autoSaveTimer: number | null = null;
+
 
 
 
@@ -300,31 +311,23 @@ async function selectVideo() {
     }
   }
 }
-// --- 🌟 隐形守护者：深度监听 markers 数组 ---
-watch(markers, (newVal, oldVal) => {
-  // 只要数组发生变化，立刻标记为未保存状态
+// --- 自动保存监听 ---
+const isAutoSaving = ref(false);
+let autoSaveTimer: number | null = null;
+watch(markers, () => {
+  if (isClearing.value) return; // 🌟 如果正在执行清空指令，直接阻断保存！
   unsavedChanges.value = true;
-
-  // 如果未开启自动保存，或者当前没有有效视频，则跳过
-  if (!autoSaveEnabled.value || !videoPath.value) return;
-
-  // 防抖机制 (Debounce)：用户可能在 1 秒内连续按键，我们等用户停手 800 毫秒后再真正写入硬盘
+  if (!settingsStore.autoSave || !videoPath.value) return;
   isAutoSaving.value = true;
   if (autoSaveTimer) window.clearTimeout(autoSaveTimer);
-
   autoSaveTimer = window.setTimeout(async () => {
     try {
-      await invoke<string>('save_markers', { videoPath: videoPath.value, markers: markers.value });
-      unsavedChanges.value = false; // 标记为已安全落盘
-    } catch (err) {
-      showToast(`❌ 自动保存异常: ${err}`);
-    } finally {
-      isAutoSaving.value = false;
-    }
+      await invoke('save_markers', { videoPath: videoPath.value, markers: markers.value });
+      unsavedChanges.value = false;
+    } catch (err) { console.error(err); }
+    finally { isAutoSaving.value = false; }
   }, 800);
-}, { deep: true }); // deep: true 极其重要，确保对象内部属性修改也能被监听到
-
-
+}, { deep: true });
 // --- 鼠标隐藏逻辑 ---
 function handleMouseMove() { showControls.value = true; resetHideTimer(); }
 function handleMouseLeave() { if (isPlaying.value) showControls.value = false; }
@@ -431,12 +434,51 @@ function addMarker() {
     if (videoRef.value && !isPlaying.value) videoRef.value.play();
   }
 }
+// 解决问题4：清空并移入后端回收站
+/*async function clearAllMarkers() {
+  if (confirm("确定要清空该视频的所有标记吗？文件将被移入回收站。")) {
+    try {
+      await invoke('move_marker_file_to_trash', { videoPath: videoPath.value });
+      markers.value = [];
+      deletedHistory.value = []; // 清空撤销栈
+      triggerOSD("🗑️ 已全部清空并移入回收站");
+    } catch (e) {
+      showToast("清空失败: " + e);
+    }
+  }
+}*/
 
-function removeMarker(index: number) {
-  markers.value.splice(index, 1);
-  // unsavedChanges.value = true;
+// --- 优化清空逻辑与自动保存冲突 ---
+const isClearing = ref(false); // 新增静默状态锁
+
+async function clearAllMarkers() {
+  if (confirm("确定要清空该视频的所有标记吗？文件将被移入回收站。")) {
+    isClearing.value = true; // 锁定自动保存
+    try {
+      await invoke('move_marker_file_to_trash', { videoPath: videoPath.value });
+      markers.value = [];
+      deletedHistory.value = [];
+      triggerOSD("🗑️ 已全部清空并移入回收站");
+    } catch (e) {
+      showToast("清空失败: " + e);
+    } finally {
+      // 延迟 1 秒后解锁，跳过空数组的保存
+      setTimeout(() => { isClearing.value = false; }, 1000);
+    }
+  }
 }
-
+// 解决问题5：关闭视频
+function closeProject() {
+  videoSrc.value = '';
+  videoPath.value = '';
+  markers.value = [];
+  deletedHistory.value = [];
+}
+function removeMarker(index: number) {
+  deletedHistory.value.push(markers.value[index]); // 压入撤销栈
+  markers.value.splice(index, 1);
+  triggerOSD("🗑️ 已删除，按 Ctrl+Z 撤销");
+}
 async function saveMarkers() {
   try {
     await invoke<string>('save_markers', { videoPath: videoPath.value, markers: markers.value });
@@ -451,12 +493,28 @@ function showToast(msg: string) {
   toastTimer = window.setTimeout(() => saveStatus.value = '', 3000);
 }
 
-// --- 全局快捷键加强版 ---
+// --- 全局快捷键加强版 (修复 Ctrl+Z 冲突) ---
 function handleKeyDown(e: KeyboardEvent) {
   const activeTag = document.activeElement?.tagName.toLowerCase();
   if (activeTag === 'input' || activeTag === 'textarea') return;
   if (!videoSrc.value) return;
 
+  // 👑 最高优先级拦截：撤销操作 (支持 Ctrl+Z 或 Cmd+Z)
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (deletedHistory.value.length > 0) {
+      // 从撤销栈中取出最后一个，并重新按时间排序
+      markers.value.push(deletedHistory.value.pop()!);
+      markers.value.sort((a, b) => a.startTime - b.startTime);
+      triggerOSD("↩️ 已撤销删除");
+      unsavedChanges.value = true;
+    } else {
+      triggerOSD("⚠️ 没有可撤销的操作");
+    }
+    return; // 拦截成功，直接退出函数，不再触发下方的 z 减速逻辑
+  }
+
+  // 常规快捷键处理
   switch(e.key.toLowerCase()) {
     case 'i': case '[': e.preventDefault(); setInPoint(); break;
     case 'o': case ']': e.preventDefault(); setOutPoint(); break;
@@ -464,7 +522,7 @@ function handleKeyDown(e: KeyboardEvent) {
     case 'f': e.preventDefault(); toggleFullscreen(); break;
     case 'm': e.preventDefault(); toggleMute(); break;
     case 'l': e.preventDefault(); showDrawer.value = !showDrawer.value; break;
-    case 'z': e.preventDefault(); setSpeed(Math.max(0.1, playbackRate.value - 0.1)); break;
+    case 'z': e.preventDefault(); setSpeed(Math.max(0.1, playbackRate.value - 0.1)); break; // 正常的Z键减速
     case 'x': e.preventDefault(); setSpeed(Math.min(5.0, playbackRate.value + 0.1)); break;
     case 'c': e.preventDefault(); setSpeed(1.0); break;
     case 'arrowleft':
@@ -473,22 +531,6 @@ function handleKeyDown(e: KeyboardEvent) {
     case 'arrowright':
       e.preventDefault(); seekTo(currentTime.value + (e.shiftKey ? 1 : 5));
       showControls.value = true; resetHideTimer(); triggerOSD(e.shiftKey ? "⏩ +1s" : "⏩ +5s"); break;
-
-      // === 新增：键盘音量控制 (上/下箭头) ===
-    case 'arrowup':
-      e.preventDefault();
-      volume.value = Math.min(1.0, volume.value + 0.05);
-      onVolumeInput(); // 复用已有的音量更新函数
-      triggerOSD(`🔊 音量: ${Math.round(volume.value * 100)}%`);
-      showControls.value = true; resetHideTimer();
-      break;
-    case 'arrowdown':
-      e.preventDefault();
-      volume.value = Math.max(0.0, volume.value - 0.05);
-      onVolumeInput();
-      triggerOSD(volume.value === 0 ? "🔇 静音" : `🔉 音量: ${Math.round(volume.value * 100)}%`);
-      showControls.value = true; resetHideTimer();
-      break;
   }
 }
 
@@ -661,7 +703,22 @@ onUnmounted(() => {
 
 .global-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed #d1d5db; color: #6b7280; border-radius: 12px;}
 .toast-message { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); background: #1f2937; color: white; padding: 0.75rem 1.5rem; border-radius: 30px; z-index: 9999; }
+/* 解决图标按钮悬停变白不可见的问题 */
+.icon-btn { background: transparent; border: none; cursor: pointer; font-size: 1.1rem; padding: 4px; border-radius: 4px; transition: all 0.2s;}
+.play-btn { color: #10b981; }
+.play-btn:hover { background: #d1fae5; color: #059669; } /* 浅绿背景，深绿图标 */
+.delete-btn { color: #ef4444; }
+.delete-btn:hover { background: #fee2e2; color: #b91c1c; } /* 浅红背景，深红图标 */
 
+/* 头部关闭按钮和清空按钮样式 */
+.secondary-btn { padding: 0.5rem 1rem; background: #fff; border: 1px solid #d1d5db; border-radius: 6px; color: #374151; font-weight: 600; cursor: pointer;}
+.secondary-btn:hover { background: #f3f4f6; }
+.save-actions { display: flex; align-items: center; gap: 10px; }
+.auto-save-indicator { font-size: 0.75rem; color: #10b981; background: #d1fae5; padding: 4px 8px; border-radius: 4px; font-weight: 600; transition: all 0.3s;}
+.auto-save-indicator.saving { color: #6b7280; background: #f3f4f6; }
+.icon-text-btn { background: none; border: none; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 4px;}
+.icon-text-btn.danger { color: #ef4444; }
+.icon-text-btn.danger:hover { background: #fee2e2; }
 @keyframes subtle-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
 .fade-controls-enter-active, .fade-controls-leave-active { transition: opacity 0.3s ease; }
 .fade-controls-enter-from, .fade-controls-leave-to { opacity: 0; }

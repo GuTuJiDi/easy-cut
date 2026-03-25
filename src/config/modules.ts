@@ -42,15 +42,15 @@ export const appModules: AppModule[] = [
         group: 'main'
     },
     /* --- 👇 未来新功能的热插拔演示 👇 --- */
-     {
-       id: 'smart-split',
-       name: '视频格式转换',
-       icon: '✨',
-       path: '/smart-split',
-       component: () => import('../views/TransformFormat.vue'),
-       isPro: true,
-       group: 'main'
-     },
+    {
+        id: 'smart-split',
+        name: '视频格式转换',
+        icon: '✨',
+        path: '/smart-split',
+        component: () => import('../views/TransformFormat.vue'),
+        isPro: true,
+        group: 'main'
+    },
     /* --- 👆 取消注释即可直接生效 👆 --- */
     {
         id: 'settings',

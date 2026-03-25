@@ -170,22 +170,48 @@ fn update_app_settings(settings: AppSettings) -> Result<(), String> {
 }
 
 // --- 修复后：软删除 JSON 文件 API (移入回收站) ---
+// #[tauri::command]
+// fn move_marker_file_to_trash(video_path: String) -> Result<(), String> {
+//     // 1. 获取标记文件的专门存储目录 (EasyCut_Data/Markers)
+//     let storage_dir = config_manager::get_markers_dir();
+//
+//     // 2. 先计算视频的唯一指纹 (因为该函数返回 Result，所以这里可以使用 ?)
+//     let fingerprint = marker_manager::calculate_video_fingerprint(&video_path)?;
+//
+//     // 3. 传入目录和指纹，获取准确的 JSON 物理路径 (直接返回 PathBuf，无需 ?)
+//     let json_path = marker_manager::get_json_path(&storage_dir, &fingerprint);
+//
+//     // 4. 将其安全移动到回收站
+//     trash_manager::move_to_trash(&json_path)
+// }
+// src-tauri/src/main.rs
+// --- 修复：增加 async 关键字，移出主线程 ---
 #[tauri::command]
-fn move_marker_file_to_trash(video_path: String) -> Result<(), String> {
-    // 1. 获取标记文件的专门存储目录 (EasyCut_Data/Markers)
+async fn move_marker_file_to_trash(video_path: String) -> Result<(), String> {
     let storage_dir = config_manager::get_markers_dir();
-
-    // 2. 先计算视频的唯一指纹 (因为该函数返回 Result，所以这里可以使用 ?)
     let fingerprint = marker_manager::calculate_video_fingerprint(&video_path)?;
-
-    // 3. 传入目录和指纹，获取准确的 JSON 物理路径 (直接返回 PathBuf，无需 ?)
     let json_path = marker_manager::get_json_path(&storage_dir, &fingerprint);
-
-    // 4. 将其安全移动到回收站
     trash_manager::move_to_trash(&json_path)
 }
+// --- 新增：核心业务闭环 API (标记联动分割) ---
+#[tauri::command]
+async fn execute_marker_split_task(video_path: String, output_dir: String) -> Result<String, String> {
+    // 1. 从统一定义的工作区获取标记存放目录
+    let storage_dir = config_manager::get_markers_dir();
 
+    // 2. 调用我们之前写好的读取逻辑（内部会自动计算特征码找 JSON）
+    let markers = match marker_manager::load_markers_logic(&storage_dir, &video_path) {
+        Ok(m) => m,
+        Err(e) => return Err(format!("❌ 无法读取该视频的配置: {}", e)),
+    };
 
+    if markers.is_empty() {
+        return Err("⚠️ 该视频没有任何有效的标记片段，请先前往「智能打轴」页面进行标记！".to_string());
+    }
+
+    // 3. 将指令移交给 FFmpeg 处理器
+    video_processor::split_video_by_markers(&video_path, &output_dir, markers).await
+}
 // ... 记得在 main() 的 invoke_handler 里加上 get_video_duration_cmd 和 open_folder
 fn main() {
     // 软件启动时，立刻初始化一次工作区目录，确保文件夹被创建
@@ -213,6 +239,7 @@ fn main() {
             get_app_settings,
             update_app_settings,
             move_marker_file_to_trash,
+            execute_marker_split_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
