@@ -477,7 +477,7 @@ function addMarker() {
 // --- 优化清空逻辑与自动保存冲突 ---
 const isClearing = ref(false); // 新增静默状态锁
 
-async function clearAllMarkers() {
+/*async function clearAllMarkers() {
   if (confirm("确定要清空该视频的所有标记吗？文件将被移入回收站。")) {
     isClearing.value = true; // 锁定自动保存
     try {
@@ -492,7 +492,29 @@ async function clearAllMarkers() {
       setTimeout(() => { isClearing.value = false; }, 1000);
     }
   }
+}*/
+
+// 记录上一次“批量操作”的快照，用于全量撤销
+const lastBatchSnapshot = ref<Marker[] | null>(null);
+
+async function clearAllMarkers() {
+  const confirmed = await confirm("确定要清空吗？原记录将备份至回收站。");
+  if (!confirmed) return;
+
+  try {
+    // 在清空前端数组前，命令后端先把当前的 JSON 扔进 Trash 目录
+    // 这样哪怕前端自动保存覆盖了原文件，用户还能在 Trash 里找回
+    await invoke('move_marker_file_to_trash', { videoPath: videoPath.value });
+
+    lastBatchSnapshot.value = [...markers.value];
+    markers.value = [];
+    triggerOSD("🗑️ 已清空并备份至回收站");
+  } catch (e) {
+    showToast("备份失败，操作已中止");
+  }
 }
+
+
 // 解决问题5：关闭视频
 function closeProject() {
   videoSrc.value = '';
@@ -528,15 +550,22 @@ function handleKeyDown(e: KeyboardEvent) {
   // 👑 最高优先级拦截：撤销操作 (支持 Ctrl+Z 或 Cmd+Z)
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
+    // 优先尝试恢复全量清空的标记
+    if (lastBatchSnapshot.value) {
+      markers.value = [...lastBatchSnapshot.value];
+      lastBatchSnapshot.value = null; // 恢复后清除快照
+      triggerOSD("↩️ 已恢复全部清空的标记");
+      return;
+    }
+
+    // 其次尝试恢复单条删除的标记
     if (deletedHistory.value.length > 0) {
-      // 从撤销栈中取出最后一个，并重新按时间排序
       markers.value.push(deletedHistory.value.pop()!);
       markers.value.sort((a, b) => a.startTime - b.startTime);
-      triggerOSD("↩️ 已撤销删除");
-      unsavedChanges.value = true;
-    } else {
-      triggerOSD("⚠️ 没有可撤销的操作");
+      triggerOSD("↩️ 已撤销单条删除");
+      return;
     }
+    triggerOSD("⚠️ 没有可撤销的操作");
     return; // 拦截成功，直接退出函数，不再触发下方的 z 减速逻辑
   }
 
