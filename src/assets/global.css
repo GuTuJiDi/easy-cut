@@ -1,0 +1,70 @@
+/* src/assets/global.css - 易剪 V1.0 全局设计规范 */
+
+/* ========================================= */
+/* 1. 基础重置与排版 */
+/* ========================================= */
+html, body { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; background-color: #f3f4f6; overflow: hidden; }
+#app { height: 100vh; }
+.app-container { display: flex; height: 100vh; overflow: hidden; width: 100vw; }
+.main-content { flex: 1; overflow-y: hidden; position: relative; background: #f3f4f6; min-width: 0; }
+
+/* ========================================= */
+/* 2. 核心视图布局 (View & Layout) */
+/* ========================================= */
+.view-container { display: flex; flex-direction: column; height: 100%; padding: 2rem; box-sizing: border-box; animation: fadeIn 0.3s ease; overflow-y: auto; }
+.view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-shrink: 0; }
+.view-title { font-size: 1.75rem; font-weight: 700; color: #111827; margin: 0 0 0.25rem 0; letter-spacing: -0.5px; }
+.view-subtitle { color: #6b7280; margin: 0; font-size: 0.95rem; }
+
+/* 卡片规范 */
+.card { background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+.card.padded { padding: 1.5rem; }
+.card-header { padding: 1.25rem 1.5rem; background: #f9fafb; border-bottom: 1px solid #e5e7eb; display: flex; align-items: center; gap: 10px; }
+.card-header h2 { margin: 0; font-size: 1.1rem; color: #1f2937; font-weight: 700; }
+.card-body { padding: 1.5rem; }
+
+/* ========================================= */
+/* 3. 按钮系统 (Button System) */
+/* ========================================= */
+.primary-btn { padding: 0.5rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; transition: background 0.2s; white-space: nowrap; font-size: 0.95rem;}
+.primary-btn:hover:not(:disabled) { background: #1d4ed8; }
+.primary-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+
+.secondary-btn { padding: 0.5rem 1rem; background: #fff; border: 1px solid #d1d5db; border-radius: 6px; color: #374151; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; font-size: 0.95rem;}
+.secondary-btn:hover:not(:disabled) { background: #f3f4f6; }
+.secondary-btn.small { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+
+.icon-btn { background: transparent; border: none; cursor: pointer; font-size: 1.1rem; padding: 4px; border-radius: 4px; transition: all 0.2s; color: #9ca3af; display: flex; align-items: center; justify-content: center;}
+.icon-btn:hover { color: #111827; background: rgba(0,0,0,0.05); }
+
+/* ========================================= */
+/* 4. 表单与输入 (Forms & Inputs) */
+/* ========================================= */
+.input-with-btn { display: flex; gap: 0.5rem; }
+.file-input { flex: 1; min-width: 0; padding: 0.5rem 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; background: #f9fafb; font-size: 0.85rem; outline: none; text-overflow: ellipsis; font-family: monospace; }
+.file-input:focus { border-color: #3b82f6; background: #fff; }
+
+/* ========================================= */
+/* 5. 选项卡导航 (Tabs - 供多个模块复用) */
+/* ========================================= */
+.tabs-header { margin-bottom: 1.5rem; flex-shrink: 0; }
+.tabs-nav { display: inline-flex; background: #e5e7eb; padding: 4px; border-radius: 10px; gap: 4px;}
+.tab-btn { background: transparent; border: none; padding: 0.6rem 1.2rem; border-radius: 8px; font-weight: 600; color: #4b5563; cursor: pointer; transition: all 0.2s; font-size: 0.95rem;}
+.tab-btn.active { background: white; color: #2563eb; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.tab-btn.disabled { opacity: 0.6; cursor: not-allowed; }
+.pro-tag { font-size: 0.6rem; background: #f59e0b; color: white; padding: 1px 4px; border-radius: 4px; margin-left: 4px; vertical-align: top;}
+
+/* ========================================= */
+/* 6. 反馈与动画 (Feedback & Animations) */
+/* ========================================= */
+.toast-message { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); background: #1f2937; color: white; padding: 0.75rem 1.5rem; border-radius: 30px; z-index: 9999; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); font-size: 0.95rem; pointer-events: none;}
+.spinner { display: inline-block; animation: spin 1s linear infinite; margin-right: 8px;}
+
+@keyframes spin { 100% { transform: rotate(360deg); } }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+.fade-page-enter-active, .fade-page-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.fade-page-enter-from { opacity: 0; transform: translateY(10px); }
+.fade-page-leave-to { opacity: 0; transform: translateY(-10px); }
+.toast-enter-active, .toast-leave-active { transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translate(-50%, 20px); }

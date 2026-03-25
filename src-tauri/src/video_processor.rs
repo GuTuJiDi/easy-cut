@@ -213,8 +213,11 @@ pub async fn split_video_by_markers(
 
     let mut logs = Vec::new();
     logs.push(format!("🚀 引擎启动：准备处理 {} 个标记片段...", markers.len()));
+    // 过滤掉被“逻辑删除”的记录
+    let active_markers: Vec<&Marker> = markers.iter().filter(|m| !m.is_deleted).collect();
+    logs.push(format!("🚀 引擎启动：准备处理 {} 个有效片段...", active_markers.len()));
 
-    for (index, marker) in markers.iter().enumerate() {
+    for (index, marker) in active_markers.into_iter().enumerate() {
         let duration = marker.end_time - marker.start_time;
         if duration <= 0.0 {
             logs.push(format!("⚠️ 跳过无效标记 (时间倒挂或为0): {}", marker.label));

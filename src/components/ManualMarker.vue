@@ -1,165 +1,50 @@
 <template>
-  <div class="view-container">
-    <header class="view-header">
-      <div>
+  <div class="manual-marker-wrapper" v-if="videoPath">
+    <header class="view-header" style="margin-bottom: 2rem;">
+      <div class="header-titles">
         <h1 class="view-title">智能打轴标记</h1>
-        <p class="view-subtitle">利用快捷键极速标记：[I]入点, [O]出点, [F]全屏, [Z/X/C]微调倍速, [L]标记列表。</p>
+        <p class="view-subtitle">利用快捷键极速标记：[I]入点, [O]出点, [F]全屏, [↑/↓]音量, [Z/X/C]倍速, [L]标记列表</p>
       </div>
       <div class="header-actions">
-        <div class="input-with-btn">
-          <input v-model="videoPath" type="text" readonly placeholder="尚未加载视频..." class="file-input compact" />
-          <button v-if="!videoSrc" class="primary-btn" @click="selectVideo">
-            <span class="icon">📁</span> 加载视频
-          </button>
-          <button v-else class="secondary-btn" @click="closeProject">
-            ✖ 关闭视频
-          </button>
+        <div class="active-file-badge">
+          <span class="file-icon">🎬</span>
+          <span class="file-name" :title="videoPath">{{ videoFileName }}</span>
+          <div class="badge-actions">
+            <button class="icon-btn" @click="selectVideo" title="更换视频">🔄</button>
+            <button class="icon-btn" @click="closeProject" title="关闭视频">✖</button>
+          </div>
         </div>
       </div>
     </header>
-    <div class="workspace-grid" v-if="videoSrc">
 
-      <div class="card player-card" ref="playerContainerRef" :class="{ 'is-fullscreen': isFullscreen }">
-
-        <div class="video-wrapper" @mousemove="handleMouseMove" @mouseleave="handleMouseLeave" @click="togglePlay" :class="{ 'hide-cursor': !showControls && isPlaying }">
-          <video
-              ref="videoRef" :src="videoSrc" class="video-element"
-              @timeupdate="onTimeUpdate" @loadedmetadata="onLoadedMetadata"
-              @play="isPlaying = true" @pause="isPlaying = false" @ended="isPlaying = false"
-              @volumechange="onNativeVolumeChange"
-          ></video>
-
-          <transition name="fade">
-            <div class="osd-message" v-if="osdVisible">{{ osdText }}</div>
-          </transition>
-
-          <div class="play-overlay" :class="{ 'is-playing': isPlaying }">
-            <div class="play-icon-center">▶</div>
-          </div>
-
-          <transition name="slide-right">
-            <div class="fullscreen-drawer" v-show="isFullscreen && showDrawer" @click.stop>
-              <div class="drawer-header">
-                <h3>标记列表 ({{ markers.length }})</h3>
-                <button class="icon-btn" @click="showDrawer = false">✖</button>
-              </div>
-              <ul class="drawer-list">
-                <li v-for="(m, index) in markers" :key="m.id" @click="seekTo(m.startTime)" :style="{ borderLeft: `4px solid ${getMarkerColor(index)}` }">
-                  <span class="d-label">{{ m.label }}</span>
-                  <span class="d-time">{{ formatTime(m.startTime) }}</span>
-                </li>
-              </ul>
-            </div>
-          </transition>
-
-          <transition name="fade-controls">
-            <div class="video-controls-overlay" v-show="showControls || !isPlaying" @click.stop>
-
-              <div class="progress-bar-container" @mousedown="startDrag" @mousemove="onDrag" @mouseup="endDrag" @mouseleave="endDrag">
-                <div class="progress-track" ref="trackRef">
-                  <div class="progress-bg"></div>
-
-                  <div v-for="(m, index) in markers" :key="'track-'+m.id">
-                    <div class="chapter-segment"
-                         :style="{ left: `${(m.startTime / duration) * 100}%`, width: `${((m.endTime - m.startTime) / duration) * 100}%`, backgroundColor: getMarkerColor(index) }"
-                         :title="`${m.label} (${formatTime(m.startTime)} - ${formatTime(m.endTime)})`">
-                    </div>
-                    <div class="chapter-dot"
-                         :style="{ left: `${(m.startTime / duration) * 100}%`, backgroundColor: getMarkerColor(index) }">
-                    </div>
-                  </div>
-
-                  <div class="progress-marker-in" v-if="draftIn !== null" :style="{ left: `${(draftIn / duration) * 100}%` }"></div>
-
-                  <div class="playhead-thumb" :style="{ left: `${(currentTime / (duration || 1)) * 100}%` }"></div>
-                </div>
-              </div>
-
-              <div class="controls-dashboard">
-                <div class="left-controls">
-                  <button class="control-icon-btn" @click="togglePlay" :title="isPlaying ? '暂停 (空格)' : '播放 (空格)'">
-                    {{ isPlaying ? '⏸' : '▶' }}
-                  </button>
-
-                  <div class="volume-control-horizontal" @mouseenter="isVolumeHovered = true" @mouseleave="isVolumeHovered = false">
-                    <button class="control-icon-btn volume-btn" @click="toggleMute" title="静音 (M)">
-                      {{ isMuted || volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊' }}
-                    </button>
-                    <div class="volume-slider-wrapper" :class="{ 'expanded': isVolumeHovered }">
-                      <input type="range" class="volume-slider" min="0" max="1" step="0.05" v-model="volume" @input="onVolumeInput" />
-                    </div>
-                  </div>
-
-                  <div class="time-display">
-                    <span class="current-time">{{ formatTime(currentTime) }}</span>
-                    <span class="total-time">/ {{ formatTime(duration) }}</span>
-                  </div>
-                </div>
-
-                <div class="right-controls">
-
-                  <div class="speed-menu-wrapper" @mouseenter="showSpeedMenu = true" @mouseleave="showSpeedMenu = false">
-                    <button class="speed-text">{{ playbackRate.toFixed(1) }}x</button>
-                    <transition name="fade-fast">
-                      <div class="speed-dropdown" v-show="showSpeedMenu">
-                        <div v-for="spd in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]" :key="spd"
-                             class="speed-option" :class="{'active': playbackRate === spd}"
-                             @click="setSpeed(spd)">
-                          {{ spd.toFixed(2) }}x
-                        </div>
-                      </div>
-                    </transition>
-                  </div>
-
-                  <div class="action-buttons">
-                    <button class="mark-btn in-btn" @click="setInPoint" title="快捷键: I">
-                      <span class="hotkey">I</span> 入点
-                    </button>
-                    <button class="mark-btn out-btn" @click="setOutPoint" title="快捷键: O">
-                      出点 <span class="hotkey">O</span>
-                    </button>
-                  </div>
-
-                  <button class="control-icon-btn fullscreen-btn" @click="toggleFullscreen" title="全屏 (F)">
-                    <div class="f-box-icon" :class="{'exit': isFullscreen}">
-                      {{ isFullscreen ? '><' : 'F' }}
-                    </div>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </transition>
-
-          <transition name="zoom-in">
-            <div class="fullscreen-draft-modal" v-if="draftIn !== null && draftOut !== null" @click.stop>
-              <h3>保存片段</h3>
-              <p class="modal-time">{{ formatTime(draftIn) }} ➔ {{ formatTime(draftOut) }}</p>
-              <div class="modal-input-group">
-                <input ref="draftInputRef" v-model="draftLabel" type="text" placeholder="输入片段描述 (回车确认)" @keyup.enter="addMarker" />
-                <button class="confirm-btn" @click="addMarker" :disabled="!draftLabel.trim()">添加</button>
-              </div>
-            </div>
-          </transition>
-        </div>
-
-        <div class="draft-section" v-show="!isFullscreen" :class="{ 'active': draftIn !== null }">
-          <div class="draft-time-visual">
-            <div class="point-box">
-              <span class="label">入点 (IN)</span>
-              <span class="value" :class="{'highlight': draftIn !== null}">{{ draftIn !== null ? formatTime(draftIn) : '--:--.--' }}</span>
-            </div>
-            <div class="arrow">➔</div>
-            <div class="point-box">
-              <span class="label">出点 (OUT)</span>
-              <span class="value" :class="{'highlight': draftOut !== null}">{{ draftOut !== null ? formatTime(draftOut) : '等待打点...' }}</span>
+    <div class="marker-container" :class="{'is-fullscreen': isPlayerFullscreen}">
+      <!-- 播放器子组件 (完全解耦) -->
+      <EasyCutPlayer
+          ref="playerRef"
+          :src="videoSrc"
+          :markers="activeMarkers"
+          :draftIn="draftIn"
+          :draftOut="draftOut"
+          @timeupdate="currentVideoTime = $event"
+          @fullscreenchange="isPlayerFullscreen = $event"
+          style="flex: 1;"
+      >
+        <!-- 打轴输入框插槽：保证全屏时不被遮挡 -->
+        <transition name="zoom-in">
+          <div class="fullscreen-draft-modal" v-if="draftIn !== null && draftOut !== null" @click.stop>
+            <h3>保存片段</h3>
+            <p class="modal-time">{{ formatTime(draftIn) }} ➔ {{ formatTime(draftOut) }}</p>
+            <div class="modal-input-group">
+              <input ref="draftInputRef" v-model="draftLabel" type="text" placeholder="输入片段描述 (回车确认)" @keyup.enter="addMarker" />
+              <button class="confirm-btn" @click="addMarker" :disabled="!draftLabel.trim()">添加</button>
             </div>
           </div>
-        </div>
-      </div>
+        </transition>
+      </EasyCutPlayer>
 
-      <div class="card list-card" v-show="!isFullscreen">
+      <div class="card list-card" v-show="!isPlayerFullscreen">
         <div class="list-header">
-          <h3 class="list-title">📋 标记 ({{ markers.length }})</h3>
+          <h3 class="list-title">📋 标记 ({{ activeMarkers.length }})</h3>
           <div class="save-actions">
             <transition name="fade">
               <span v-if="settingsStore.autoSave" class="auto-save-indicator" :class="{'saving': isAutoSaving}">
@@ -167,144 +52,141 @@
               </span>
             </transition>
 
-            <button class="icon-text-btn danger" @click="clearAllMarkers" v-if="markers.length > 0" :disabled="isExporting" title="清空并移入回收站">
-              🗑️ 清空
-            </button>
-
-            <button v-if="!settingsStore.autoSave" class="save-btn" @click="saveMarkers" :disabled="markers.length===0 || isExporting" :class="{'pulse': unsavedChanges}">
-              💾 手动保存
-            </button>
+            <div class="action-btn-group">
+              <button class="icon-btn danger-icon" @click="clearAllMarkers" v-if="activeMarkers.length > 0" :disabled="isExporting" title="清空并移入回收站">🗑️</button>
+              <button v-if="!settingsStore.autoSave" class="icon-btn save-icon" @click="saveMarkers" :disabled="activeMarkers.length===0 || isExporting" title="手动保存" :class="{'pulse': unsavedChanges}">💾</button>
+            </div>
           </div>
         </div>
 
         <div class="list-body">
-          <div v-if="markers.length === 0" class="empty-state">
-            <div class="empty-icon">🏷️</div>
-            <h4>暂无片段</h4><p>按 <kbd>I</kbd> 设入点，<kbd>O</kbd> 设出点</p>
+          <div v-if="activeMarkers.length === 0" class="empty-state">
+            <span class="empty-icon" style="font-size: 2.5rem; display: block;">🏷️</span>
+            <h4>暂无片段</h4><p class="hint">按 <kbd>I</kbd> 设入点，<kbd>O</kbd> 设出点</p>
           </div>
 
           <ul class="marker-list" v-else>
             <transition-group name="list">
-              <li v-for="(m, index) in markers" :key="m.id" class="marker-item" :style="{ borderLeftColor: getMarkerColor(index) }">
+              <li v-for="(m, index) in activeMarkers" :key="m.id" class="marker-item" :style="{ borderLeftColor: getMarkerColor(index) }">
                 <div class="marker-info">
                   <div class="marker-header">
                     <span class="marker-index" :style="{ backgroundColor: getMarkerColor(index), color: '#fff' }">#{{ index + 1 }}</span>
-                    <span class="marker-label">{{ m.label }}</span>
+                    <span class="marker-label" :title="m.label">{{ m.label }}</span>
                   </div>
                   <span class="marker-time">{{ formatTime(m.startTime) }} ➔ {{ formatTime(m.endTime) }}</span>
                 </div>
                 <div class="marker-actions">
-                  <button class="icon-btn play-btn" @click="seekTo(m.startTime)" title="播放">▶</button>
-                  <button class="icon-btn delete-btn" @click="removeMarker(index)" title="删除">✖</button>
+                  <button class="icon-btn play-btn" @click="playerRef?.seekTo(m.startTime)" title="播放">▶</button>
+                  <button class="icon-btn delete-btn" @click="removeMarker(m.id)" title="删除">✖</button>
                 </div>
               </li>
             </transition-group>
           </ul>
         </div>
-        <div class="card list-card" v-show="!isFullscreen">
-          <div class="list-footer" v-if="markers.length > 0">
-            <button class="primary-btn export-btn" @click="exportMarkers" :disabled="isExporting">
-              <span v-if="isExporting" class="spinner">⚙️</span>
-              {{ isExporting ? '正在极速切片中...' : '🚀 一键导出全部片段' }}
-            </button>
+
+        <div class="draft-section" :class="{ 'active': draftIn !== null }">
+          <div class="draft-time-visual">
+            <div class="point-box"><span class="label">入点 (IN)</span><span class="value" :class="{'highlight': draftIn !== null}">{{ draftIn !== null ? formatTime(draftIn) : '--:--.--' }}</span></div>
+            <div class="arrow">➔</div>
+            <div class="point-box"><span class="label">出点 (OUT)</span><span class="value" :class="{'highlight': draftOut !== null}">{{ draftOut !== null ? formatTime(draftOut) : '等待打点...' }}</span></div>
           </div>
         </div>
 
-        <transition name="zoom-in">
-          <div class="export-result-overlay" v-if="showExportModal">
-            <div class="export-modal-content">
-              <div class="modal-header">
-                <h2>🎉 导出完成</h2>
-                <button class="icon-btn" @click="showExportModal = false">✖</button>
-              </div>
-              <div class="modal-body">
-                <textarea class="log-textarea" readonly :value="exportLogs"></textarea>
-              </div>
-              <div class="modal-footer">
-                <button class="secondary-btn" @click="showExportModal = false">关闭</button>
-                <button class="primary-btn" @click="openExportFolder">📂 打开所在文件夹</button>
-              </div>
-            </div>
-          </div>
-        </transition>
+        <div class="list-footer" v-if="activeMarkers.length > 0">
+          <button class="primary-btn export-btn" @click="exportMarkers" :disabled="isExporting">
+            <span v-if="isExporting" class="spinner">⚙️</span>
+            {{ isExporting ? '正在极速切片中...' : '🚀 一键导出全部片段' }}
+          </button>
+        </div>
       </div>
     </div>
-
-    <div class="global-empty" v-else>
-      <div class="empty-icon-large">🎬</div>
-      <h2>欢迎使用智能打轴系统</h2>
-      <p>请加载视频，体验全屏沉浸式标记与多色彩进度条。</p>
-    </div>
-
-    <transition name="toast"><div v-if="saveStatus" class="toast-message">{{ saveStatus }}</div></transition>
   </div>
+
+  <div class="view-container global-empty" v-else>
+    <div class="empty-icon-large" style="font-size: 4rem;">🎬</div>
+    <h2>欢迎使用智能打轴系统</h2>
+    <p>请加载视频，体验全屏沉浸式标记与多色彩进度条。</p>
+    <button class="primary-btn" style="margin-top: 1rem;" @click="selectVideo">📁 选择本地视频</button>
+  </div>
+
+  <!-- 轻提示 -->
+  <transition name="toast"><div v-if="saveStatus" class="toast-message">{{ saveStatus }}</div></transition>
+
+  <!-- 🌟 核心修复：解除注释，重新激活带有精美计时日志的导出弹窗 -->
+  <ExportResultModal
+      v-model="showExportModal"
+      :logs="exportLogs"
+      :exportDir="finalExportDir"
+      :costTime="exportCostTime"
+  />
 </template>
 
 <script setup lang="ts">
-import { invoke } from '@tauri-apps/api/core';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { useRoute } from 'vue-router'; // 🌟 新增：引入当前路由对象
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { convertFileSrc } from '@tauri-apps/api/core';
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'; // <--- 新增 watch
-import { useSettingsStore } from '../stores/settings'; // 引入配置仓库
+
+// 引入解耦的组件
+import EasyCutPlayer from './EasyCutPlayer.vue';
+import ExportResultModal from './ExportResultModal.vue';
+import { useSettingsStore } from '../stores/settings';
+
+// ==========================================
+// 1. 数据契约与状态
+// ==========================================
+interface Marker { id: string; startTime: number; endTime: number; label: string; is_deleted: boolean; }
+interface ProjectMeta { project_id: string; project_name: string; created_at: number; linked_file_hash: string | null; linked_file_name: string | null; source_type: string; [key: string]: any; }
+interface EasyCutProject { version: string; meta: ProjectMeta; markers: Marker[]; }
+
 const settingsStore = useSettingsStore();
-// --- 撤销 (Undo) 栈 ---
-const deletedHistory = ref<Marker[]>([]);
-// 核心引用
+const route = useRoute(); // 🌟 新增：获取路由参数
+// 引用子组件实例
+const playerRef = ref<InstanceType<typeof EasyCutPlayer> | null>(null);
+
+// 业务状态
 const videoPath = ref('');
 const videoSrc = ref('');
-const videoRef = ref<HTMLVideoElement | null>(null);
-const playerContainerRef = ref<HTMLDivElement | null>(null);
-const draftInputRef = ref<HTMLInputElement | null>(null);
+const currentVideoTime = ref(0);
+const isPlayerFullscreen = ref(false);
 
-// 播放器状态
-const isPlaying = ref(false);
-const currentTime = ref(0);
-const duration = ref(0);
-const playbackRate = ref(1.0);
-const volume = ref(1.0);
-const isMuted = ref(false);
-const isVolumeHovered = ref(false);
-
-// UI控制状态
-const isFullscreen = ref(false);
-const showControls = ref(true);
-const showDrawer = ref(false);
-const showSpeedMenu = ref(false);
-let hideControlsTimer: number | null = null;
-
-// 色彩管理系统 (供进度条和列表使用)
-const colorPalette = [
-  '#34d399', '#60a5fa', '#f472b6', '#fbbf24',
-  '#c084fc', '#f87171', '#2dd4bf', '#818cf8'
-];
-function getMarkerColor(index: number) {
-  return colorPalette[index % colorPalette.length];
-}
-
-// OSD 提示系统
-const osdVisible = ref(false);
-const osdText = ref('');
-let osdTimer: number | null = null;
-
-function triggerOSD(msg: string) {
-  osdText.value = msg; osdVisible.value = true;
-  if (osdTimer) clearTimeout(osdTimer);
-  osdTimer = window.setTimeout(() => { osdVisible.value = false; }, 1500);
-}
-
-// 打轴数据
 const draftIn = ref<number | null>(null);
 const draftOut = ref<number | null>(null);
 const draftLabel = ref('');
-interface Marker { id: string; startTime: number; endTime: number; label: string; }
+const draftInputRef = ref<HTMLInputElement | null>(null);
+
 const markers = ref<Marker[]>([]);
-const saveStatus = ref('');
+const deletedHistory = ref<Marker[]>([]);
+const lastBatchSnapshot = ref<Marker[] | null>(null);
+
+const isClearing = ref(false);
 const unsavedChanges = ref(false);
-// --- 新增：自动保存相关状态 ---
-const autoSaveEnabled = ref(true); // 默认假定开启，稍后从后端读取真实配置
+const saveStatus = ref('');
+let toastTimer: number | null = null;
+const isAutoSaving = ref(false);
+let autoSaveTimer: number | null = null;
+
+const currentProjectMeta = ref<ProjectMeta | null>(null);
+const currentProjectVersion = ref('1.1.0');
+
+const isExporting = ref(false);
+const showExportModal = ref(false);
+const exportLogs = ref('');
+const finalExportDir = ref('');
 
 
+const exportCostTime = ref(''); // 🌟 新增：单独存储耗时
 
+
+// ==========================================
+// 2. 计算属性
+// ==========================================
+const videoFileName = computed(() => {
+  if (!videoPath.value) return '';
+  return videoPath.value.split(/[/\\]/).pop() || '';
+});
+
+const activeMarkers = computed(() => markers.value.filter(m => !m.is_deleted));
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds === null) return '00:00.00';
@@ -313,490 +195,275 @@ function formatTime(seconds: number): string {
   const ms = Math.floor((seconds % 1) * 100).toString().padStart(2, '0');
   return `${m}:${s}.${ms}`;
 }
+const colorPalette = ['#34d399', '#60a5fa', '#f472b6', '#fbbf24', '#c084fc', '#f87171', '#2dd4bf', '#818cf8'];
+function getMarkerColor(index: number) { return colorPalette[index % colorPalette.length]; }
 
-
-// 在选择视频 (selectVideo) 时，顺便向后端拉取最新的全局偏好设置
-async function selectVideo() {
-  const selected = await open({ multiple: false, filters: [{ name: 'Videos', extensions: ['mp4', 'mkv', 'mov', 'avi'] }] });
-  if (selected && typeof selected === 'string') {
-    videoPath.value = selected; videoSrc.value = convertFileSrc(selected);
-    draftIn.value = null; draftOut.value = null; draftLabel.value = '';
-    saveStatus.value = ''; unsavedChanges.value = false; playbackRate.value = 1.0;
-
-    try {
-      // 1. 拉取历史标记
-      const historyMarkers = await invoke<Marker[]>('load_markers', { videoPath: selected });
-      markers.value = historyMarkers || [];
-      if (markers.value.length > 0) showToast(`✅ 恢复 ${markers.value.length} 个历史标记`);
-
-      // 2. 拉取全局设置 (获取用户是否开启了自动保存)
-      const settings = await invoke<any>('get_app_settings');
-      autoSaveEnabled.value = settings.autoSaveEnabled;
-    } catch (e) {
-      markers.value = [];
-    }
-  }
-}
-// --- 自动保存监听 ---
-const isAutoSaving = ref(false);
-let autoSaveTimer: number | null = null;
-watch(markers, () => {
-  if (isClearing.value) return; // 🌟 如果正在执行清空指令，直接阻断保存！
-  unsavedChanges.value = true;
-  if (!settingsStore.autoSave || !videoPath.value) return;
-  isAutoSaving.value = true;
-  if (autoSaveTimer) window.clearTimeout(autoSaveTimer);
-  autoSaveTimer = window.setTimeout(async () => {
-    try {
-      await invoke('save_markers', { videoPath: videoPath.value, markers: markers.value });
-      unsavedChanges.value = false;
-    } catch (err) { console.error(err); }
-    finally { isAutoSaving.value = false; }
-  }, 800);
-}, { deep: true });
-// --- 鼠标隐藏逻辑 ---
-function handleMouseMove() { showControls.value = true; resetHideTimer(); }
-function handleMouseLeave() { if (isPlaying.value) showControls.value = false; }
-function resetHideTimer() {
-  if (hideControlsTimer) clearTimeout(hideControlsTimer);
-  hideControlsTimer = window.setTimeout(() => { if (isPlaying.value) showControls.value = false; }, 2500);
-}
-
-// --- 视频时间与自定义进度条拖拽逻辑 ---
-let isDragging = false;
-function onTimeUpdate() { if (videoRef.value && !isDragging) currentTime.value = videoRef.value.currentTime; }
-function onLoadedMetadata() { if (videoRef.value) { duration.value = videoRef.value.duration; setSpeed(1.0); } }
-function togglePlay() {
-  if (!videoRef.value) return;
-  if (videoRef.value.paused) { videoRef.value.play(); resetHideTimer(); triggerOSD("▶ 播放"); }
-  else { videoRef.value.pause(); showControls.value = true; triggerOSD("⏸ 暂停"); }
-}
-function seekTo(time: number) {
-  if (videoRef.value) {
-    const safeTime = Math.max(0, Math.min(time, duration.value));
-    videoRef.value.currentTime = safeTime; currentTime.value = safeTime;
-    resetHideTimer();
-  }
-}
-
-function startDrag(e: MouseEvent) { isDragging = true; updateProgressByMouse(e); }
-function onDrag(e: MouseEvent) { if (isDragging) updateProgressByMouse(e); }
-function endDrag(e: MouseEvent) {
-  if (isDragging) { updateProgressByMouse(e); isDragging = false; seekTo(currentTime.value); }
-}
-function updateProgressByMouse(e: MouseEvent) {
-  const track = e.currentTarget as HTMLElement;
-  if (!track) return;
-  const rect = track.getBoundingClientRect();
-  let percent = (e.clientX - rect.left) / rect.width;
-  percent = Math.max(0, Math.min(1, percent));
-  currentTime.value = percent * duration.value;
-}
-
-// --- 音量与倍速 ---
-function setSpeed(spd: number) {
-  playbackRate.value = spd;
-  if (videoRef.value) videoRef.value.playbackRate = spd;
-  showSpeedMenu.value = false;
-  triggerOSD(`倍速: ${spd.toFixed(2)}x`);
-}
-function toggleMute() {
-  if (!videoRef.value) return;
-  videoRef.value.muted = !videoRef.value.muted;
-  isMuted.value = videoRef.value.muted;
-  if (!isMuted.value && volume.value === 0) { volume.value = 0.5; videoRef.value.volume = 0.5; }
-  triggerOSD(isMuted.value ? "🔇 静音" : `🔊 音量: ${Math.round(volume.value * 100)}%`);
-}
-function onVolumeInput() {
-  if (!videoRef.value) return;
-  videoRef.value.volume = volume.value;
-  videoRef.value.muted = volume.value === 0;
-  isMuted.value = videoRef.value.muted;
-}
-function onNativeVolumeChange() {
-  if (videoRef.value) { volume.value = videoRef.value.volume; isMuted.value = videoRef.value.muted; }
-}
-
-// --- 全屏逻辑 ---
-function toggleFullscreen() {
-  if (!document.fullscreenElement) { playerContainerRef.value?.requestFullscreen().catch(err => console.log(err)); }
-  else { document.exitFullscreen(); }
-}
-function handleFullscreenChange() {
-  isFullscreen.value = !!document.fullscreenElement;
-  if (!isFullscreen.value) showDrawer.value = false;
-}
-
-// --- 打轴逻辑 ---
-function setInPoint() {
-  draftIn.value = currentTime.value;
-  if (draftOut.value !== null && draftOut.value <= draftIn.value) draftOut.value = null;
-  triggerOSD(`[ 入点 ] ${formatTime(draftIn.value)}`);
-}
-
-function setOutPoint() {
-  if (draftIn.value === null) {
-    const lastEnd = markers.value.length > 0 ? markers.value[markers.value.length - 1].endTime : 0;
-    if (currentTime.value <= lastEnd) { triggerOSD("⚠️ 无法打出点：时间有误"); return; }
-    draftIn.value = lastEnd;
-    triggerOSD(`智能连轴: ${formatTime(draftIn.value)}`);
-  }
-
-  if (currentTime.value <= draftIn.value) { triggerOSD("⚠️ 出点必须大于入点"); return; }
-
-  draftOut.value = currentTime.value;
-  if (videoRef.value) videoRef.value.pause();
-  showControls.value = true;
-  nextTick(() => { draftInputRef.value?.focus(); });
-}
-
-function addMarker() {
-  if (draftIn.value !== null && draftOut.value !== null && draftLabel.value.trim() !== '') {
-    markers.value.push({ id: Date.now().toString(), startTime: draftIn.value, endTime: draftOut.value, label: draftLabel.value.trim() });
-    markers.value.sort((a, b) => a.startTime - b.startTime);
-    // unsavedChanges.value = true;
-    draftIn.value = null; draftOut.value = null; draftLabel.value = '';
-    triggerOSD("✅ 已添加");
-    if (videoRef.value && !isPlaying.value) videoRef.value.play();
-  }
-}
-// 解决问题4：清空并移入后端回收站
-/*async function clearAllMarkers() {
-  if (confirm("确定要清空该视频的所有标记吗？文件将被移入回收站。")) {
-    try {
-      await invoke('move_marker_file_to_trash', { videoPath: videoPath.value });
-      markers.value = [];
-      deletedHistory.value = []; // 清空撤销栈
-      triggerOSD("🗑️ 已全部清空并移入回收站");
-    } catch (e) {
-      showToast("清空失败: " + e);
-    }
-  }
-}*/
-
-// --- 优化清空逻辑与自动保存冲突 ---
-const isClearing = ref(false); // 新增静默状态锁
-
-/*async function clearAllMarkers() {
-  if (confirm("确定要清空该视频的所有标记吗？文件将被移入回收站。")) {
-    isClearing.value = true; // 锁定自动保存
-    try {
-      await invoke('move_marker_file_to_trash', { videoPath: videoPath.value });
-      markers.value = [];
-      deletedHistory.value = [];
-      triggerOSD("🗑️ 已全部清空并移入回收站");
-    } catch (e) {
-      showToast("清空失败: " + e);
-    } finally {
-      // 延迟 1 秒后解锁，跳过空数组的保存
-      setTimeout(() => { isClearing.value = false; }, 1000);
-    }
-  }
-}*/
-
-// 记录上一次“批量操作”的快照，用于全量撤销
-const lastBatchSnapshot = ref<Marker[] | null>(null);
-
-async function clearAllMarkers() {
-  const confirmed = await confirm("确定要清空吗？原记录将备份至回收站。");
-  if (!confirmed) return;
-
-  try {
-    // 在清空前端数组前，命令后端先把当前的 JSON 扔进 Trash 目录
-    // 这样哪怕前端自动保存覆盖了原文件，用户还能在 Trash 里找回
-    await invoke('move_marker_file_to_trash', { videoPath: videoPath.value });
-
-    lastBatchSnapshot.value = [...markers.value];
-    markers.value = [];
-    triggerOSD("🗑️ 已清空并备份至回收站");
-  } catch (e) {
-    showToast("备份失败，操作已中止");
-  }
-}
-
-
-// 解决问题5：关闭视频
-function closeProject() {
-  videoSrc.value = '';
-  videoPath.value = '';
-  markers.value = [];
-  deletedHistory.value = [];
-}
-function removeMarker(index: number) {
-  deletedHistory.value.push(markers.value[index]); // 压入撤销栈
-  markers.value.splice(index, 1);
-  triggerOSD("🗑️ 已删除，按 Ctrl+Z 撤销");
-}
-async function saveMarkers() {
-  try {
-    await invoke<string>('save_markers', { videoPath: videoPath.value, markers: markers.value });
-    unsavedChanges.value = false; showToast(`✅ JSON 已安全保存`);
-  } catch (err) { showToast(`❌ 保存失败`); }
-}
-
-let toastTimer: number | null = null;
 function showToast(msg: string) {
   saveStatus.value = msg;
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => saveStatus.value = '', 3000);
 }
 
-// --- 全局快捷键加强版 (修复 Ctrl+Z 冲突) ---
+// ==========================================
+// 3. 业务逻辑
+// ==========================================
+// ==========================================
+// 3. 视频与项目管理
+// ==========================================
+
+// 🌟 修复：抽离出独立的核心加载逻辑，供手动选择和路由跳转复用
+async function loadVideoProject(targetPath: string) {
+  videoPath.value = targetPath;
+  videoSrc.value = convertFileSrc(targetPath);
+  draftIn.value = null; draftOut.value = null; draftLabel.value = '';
+  unsavedChanges.value = false; markers.value = []; deletedHistory.value = []; lastBatchSnapshot.value = null;
+
+  try {
+    const project = await invoke<EasyCutProject>('load_project', { videoPath: targetPath });
+    currentProjectMeta.value = project.meta;
+    currentProjectVersion.value = project.version;
+    markers.value = project.markers;
+    if (markers.value.length > 0) markers.value.sort((a, b) => a.startTime - b.startTime);
+    showToast(`✅ 项目加载成功`);
+  } catch (e) {
+    console.error(e);
+    markers.value = [];
+  }
+}
+
+// UI 触发的手动选择文件
+async function selectVideo() {
+  const selected = await open({ multiple: false, filters: [{ name: 'Videos', extensions: ['mp4', 'mkv', 'mov', 'avi'] }] });
+  if (selected && typeof selected === 'string') {
+    await loadVideoProject(selected);
+  }
+}
+
+function closeProject() {
+  videoPath.value = ''; videoSrc.value = ''; markers.value = []; currentProjectMeta.value = null; draftIn.value = null; draftOut.value = null; deletedHistory.value = [];
+}
+
+function setInPoint() {
+  draftIn.value = currentVideoTime.value;
+  if (draftOut.value !== null && draftOut.value <= draftIn.value) draftOut.value = null;
+  playerRef.value?.triggerOSD(`[ 入点 ] ${formatTime(draftIn.value)}`);
+}
+
+function setOutPoint() {
+  if (draftIn.value === null) {
+    const lastEnd = activeMarkers.value.length > 0 ? activeMarkers.value[activeMarkers.value.length - 1].endTime : 0;
+    if (currentVideoTime.value <= lastEnd) { playerRef.value?.triggerOSD("⚠️ 无法打出点：时间有误"); return; }
+    draftIn.value = lastEnd;
+  }
+  if (currentVideoTime.value <= draftIn.value) { playerRef.value?.triggerOSD("⚠️ 出点必须大于入点"); return; }
+
+  draftOut.value = currentVideoTime.value;
+  playerRef.value?.togglePlay();
+  nextTick(() => draftInputRef.value?.focus());
+}
+
+function addMarker() {
+  if (draftIn.value !== null && draftOut.value !== null && draftLabel.value.trim() !== '') {
+    markers.value.push({ id: Date.now().toString(), startTime: draftIn.value, endTime: draftOut.value, label: draftLabel.value.trim(), is_deleted: false });
+    markers.value.sort((a, b) => a.startTime - b.startTime);
+    draftIn.value = null; draftOut.value = null; draftLabel.value = '';
+    playerRef.value?.triggerOSD("✅ 已添加");
+    playerRef.value?.togglePlay();
+  }
+}
+
+function removeMarker(id: string) {
+  const target = markers.value.find(m => m.id === id);
+  if (target) {
+    target.is_deleted = true; deletedHistory.value.push(target);
+    playerRef.value?.triggerOSD("🗑️ 已删除，按 Ctrl+Z 撤销");
+  }
+}
+
+async function clearAllMarkers() {
+  const confirmed = await confirm("确定要清空吗？原记录将备份至回收站。");
+  if (!confirmed) return;
+  isClearing.value = true;
+  try {
+    await invoke('move_marker_file_to_trash', { videoPath: videoPath.value });
+    lastBatchSnapshot.value = JSON.parse(JSON.stringify(markers.value));
+    markers.value.forEach(m => m.is_deleted = true);
+    playerRef.value?.triggerOSD("🗑️ 已清空");
+  } catch (e) { showToast("备份失败"); }
+  finally { setTimeout(() => isClearing.value = false, 1000); }
+}
+
+async function saveProjectCore() {
+  if (!currentProjectMeta.value) return;
+  await invoke('save_project', { project: { version: currentProjectVersion.value, meta: currentProjectMeta.value, markers: markers.value } });
+}
+
+async function saveMarkers() {
+  try { await saveProjectCore(); unsavedChanges.value = false; showToast(`✅ JSON 已安全保存`); } catch (err) { showToast(`❌ 保存失败`); }
+}
+
+watch(markers, () => {
+  if (isClearing.value) return;
+  unsavedChanges.value = true;
+  if (!settingsStore.autoSave || !videoPath.value) return;
+  isAutoSaving.value = true;
+  if (autoSaveTimer) window.clearTimeout(autoSaveTimer);
+  autoSaveTimer = window.setTimeout(async () => {
+    try { await saveProjectCore(); unsavedChanges.value = false; } catch (e) {} finally { isAutoSaving.value = false; }
+  }, 800);
+}, { deep: true });
+
+async function exportMarkers() {
+  const outDir = await open({ directory: true, multiple: false });
+  if (!outDir || typeof outDir !== 'string') return;
+
+  isExporting.value = true;
+  playerRef.value?.triggerOSD("🚀 FFmpeg 极速引擎启动...");
+  if (autoSaveTimer) window.clearTimeout(autoSaveTimer);
+  const startTime = performance.now();
+  try {
+    const result = await invoke<{logs: string, target_dir: string}>('execute_marker_split_task', { videoPath: videoPath.value, outputDir: outDir });
+    // 🌟 核心修改：分离日志与时间
+    exportCostTime.value = ((performance.now() - startTime) / 1000).toFixed(1);
+    exportLogs.value = result.logs; // 不再拼接时间文本
+    finalExportDir.value = result.target_dir;
+
+    // 🌟 核心触发：打开含有计时的弹窗！
+    showExportModal.value = true;
+  } catch (err) {
+    alert(`❌ 导出失败:\n${err}`);
+  } finally {
+    isExporting.value = false;
+  }
+}
+
+// ==========================================
+// 6. 全局快捷键路由
+// ==========================================
 function handleKeyDown(e: KeyboardEvent) {
   const activeTag = document.activeElement?.tagName.toLowerCase();
   if (activeTag === 'input' || activeTag === 'textarea') return;
-  if (!videoSrc.value) return;
 
-  // 👑 最高优先级拦截：撤销操作 (支持 Ctrl+Z 或 Cmd+Z)
+  // 🌟 修复关键：如果弹窗开启，阻止一切快捷键，避免误触
+  if (!videoSrc.value || showExportModal.value) return;
+
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
-    // 优先尝试恢复全量清空的标记
-    if (lastBatchSnapshot.value) {
-      markers.value = [...lastBatchSnapshot.value];
-      lastBatchSnapshot.value = null; // 恢复后清除快照
-      triggerOSD("↩️ 已恢复全部清空的标记");
-      return;
-    }
-
-    // 其次尝试恢复单条删除的标记
-    if (deletedHistory.value.length > 0) {
-      markers.value.push(deletedHistory.value.pop()!);
-      markers.value.sort((a, b) => a.startTime - b.startTime);
-      triggerOSD("↩️ 已撤销单条删除");
-      return;
-    }
-    triggerOSD("⚠️ 没有可撤销的操作");
-    return; // 拦截成功，直接退出函数，不再触发下方的 z 减速逻辑
+    if (lastBatchSnapshot.value) { markers.value = [...lastBatchSnapshot.value]; lastBatchSnapshot.value = null; playerRef.value?.triggerOSD("↩️ 恢复全部"); return; }
+    if (deletedHistory.value.length > 0) { const last = deletedHistory.value.pop()!; last.is_deleted = false; playerRef.value?.triggerOSD("↩️ 撤销删除"); return; }
+    return;
   }
 
-  // 常规快捷键处理
+  // 播放器操作移交子组件
   switch(e.key.toLowerCase()) {
     case 'i': case '[': e.preventDefault(); setInPoint(); break;
     case 'o': case ']': e.preventDefault(); setOutPoint(); break;
-    case ' ': e.preventDefault(); togglePlay(); break;
-    case 'f': e.preventDefault(); toggleFullscreen(); break;
-    case 'm': e.preventDefault(); toggleMute(); break;
-    case 'l': e.preventDefault(); showDrawer.value = !showDrawer.value; break;
-    case 'z': e.preventDefault(); setSpeed(Math.max(0.1, playbackRate.value - 0.1)); break; // 正常的Z键减速
-    case 'x': e.preventDefault(); setSpeed(Math.min(5.0, playbackRate.value + 0.1)); break;
-    case 'c': e.preventDefault(); setSpeed(1.0); break;
-    case 'arrowleft':
-      e.preventDefault(); seekTo(currentTime.value - (e.shiftKey ? 1 : 5));
-      showControls.value = true; resetHideTimer(); triggerOSD(e.shiftKey ? "⏪ -1s" : "⏪ -5s"); break;
-    case 'arrowright':
-      e.preventDefault(); seekTo(currentTime.value + (e.shiftKey ? 1 : 5));
-      showControls.value = true; resetHideTimer(); triggerOSD(e.shiftKey ? "⏩ +1s" : "⏩ +5s"); break;
+    case ' ': e.preventDefault(); playerRef.value?.togglePlay(); break;
+    case 'f': e.preventDefault(); playerRef.value?.toggleFullscreen(); break;
+    case 'm': e.preventDefault(); playerRef.value?.toggleMute(); break;
+      // 在 handleKeyDown 的 switch 语句中：
+    case 'l': e.preventDefault(); playerRef.value?.toggleDrawer(); break; // 🌟 修复：恢复 L 键呼出侧边栏
+    case 'arrowup': e.preventDefault(); if (playerRef.value) { playerRef.value.setVolume(playerRef.value.getVolume() + 0.1); playerRef.value.triggerOSD(`🔊 音量: ${Math.round(playerRef.value.getVolume()*100)}%`);} break;
+    case 'arrowdown': e.preventDefault(); if (playerRef.value) { playerRef.value.setVolume(playerRef.value.getVolume() - 0.1); playerRef.value.triggerOSD(`🔉 音量: ${Math.round(playerRef.value.getVolume()*100)}%`);} break;
+    case 'arrowleft': e.preventDefault(); playerRef.value?.seekTo(currentVideoTime.value - (e.shiftKey ? 1 : 5)); break;
+    case 'arrowright': e.preventDefault(); playerRef.value?.seekTo(currentVideoTime.value + (e.shiftKey ? 1 : 5)); break;
+    case 'z': e.preventDefault(); if(playerRef.value) playerRef.value.setSpeed(Math.max(0.1, playerRef.value.getPlaybackRate() - 0.1)); break;
+    case 'x': e.preventDefault(); if(playerRef.value) playerRef.value.setSpeed(Math.min(3.0, playerRef.value.getPlaybackRate() + 0.1)); break;
+    case 'c': e.preventDefault(); playerRef.value?.setSpeed(1.0); break;
+    case 'backspace': if (activeMarkers.value.length > 0) removeMarker(activeMarkers.value[activeMarkers.value.length - 1].id); break;
   }
 }
-// --- 导出逻辑所需状态 ---
-const isExporting = ref(false);
-const showExportModal = ref(false);
-const exportLogs = ref('');
-const finalExportDir = ref('');
 
-// --- 核心闭环：执行导出 ---
-/*async function exportMarkers() {
-  // 1. 如果有未保存的改动，强制先保存一次，确保后端读取的是最新 JSON
-  if (unsavedChanges.value) {
-    try {
-      await invoke('save_markers', { videoPath: videoPath.value, markers: markers.value });
-      unsavedChanges.value = false;
-    } catch (e) {
-      showToast("⚠️ 自动保存失败，可能导致导出旧数据");
-    }
-  }
+// 🌟 核心修复：使用 watch 监听路由参数变化（无视 keep-alive 缓存）
+watch(
+    () => route.query.loadVideo,
+    (newPath) => {
+      if (newPath && typeof newPath === 'string') {
+        // 避免重复加载当前正在处理的同一个视频
+        if (videoPath.value !== newPath) {
+          loadVideoProject(newPath);
+        }
+      }
+    },
+    { immediate: true } // immediate: true 保证了不管是第一次进页面还是后续跳转，都能立刻触发
+);
 
-  // 2. 呼出系统弹窗，让用户选择保存到哪里
-  const outDir = await open({ directory: true, multiple: false });
-  if (!outDir || typeof outDir !== 'string') return;
-
-  // 3. 启动全屏遮罩加载状态
-  isExporting.value = true;
-  triggerOSD("🚀 FFmpeg 极速引擎启动...");
-
-  try {
-    // 4. 调用刚才写的 Rust 核心引擎
-    const result = await invoke<{logs: string, target_dir: string}>('execute_marker_split_task', {
-      videoPath: videoPath.value,
-      outputDir: outDir
-    });
-
-    // 5. 渲染结果
-    exportLogs.value = result.logs;
-    finalExportDir.value = result.target_dir;
-    showExportModal.value = true;
-  } catch (error) {
-    alert(`❌ 导出发生致命错误:\n${error}`);
-  } finally {
-    isExporting.value = false;
-  }
-}*/
-async function exportMarkers() {
-  // 1. 呼出系统弹窗，让用户选择保存到哪里 (这步极快)
-  const outDir = await open({ directory: true, multiple: false });
-  if (!outDir || typeof outDir !== 'string') return;
-
-  // 2. 🚀 UI 防呆锁死：开启遮罩，阻止任何其他操作
-  isExporting.value = true;
-  triggerOSD("🚀 开始提取...");
-
-  // 3. 强制清空自动保存定时器，防止冲突！
-  if (autoSaveTimer) window.clearTimeout(autoSaveTimer);
-
-  // 4. 安全执行导出
-  try {
-    const result = await invoke<{logs: string, target_dir: string}>('execute_marker_split_task', {
-      videoPath: videoPath.value,
-      outputDir: outDir
-    });
-
-    exportLogs.value = result.logs;
-    finalExportDir.value = result.target_dir;
-    showExportModal.value = true;
-  } catch (error) {
-    alert(`❌ 导出失败:\n${error}`);
-  } finally {
-    isExporting.value = false;
-    triggerOSD("✅ 提取任务结束");
-  }
-}
-// --- 打开导出的专属文件夹 ---
-async function openExportFolder() {
-  if (finalExportDir.value) {
-    try {
-      await invoke('open_folder', { path: finalExportDir.value });
-      showExportModal.value = false; // 打开后顺便关掉弹窗
-    } catch (e) {
-      showToast("无法打开目录");
-    }
-  }
-}
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
-  document.addEventListener('fullscreenchange', handleFullscreenChange);
 });
+
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
-  document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  if (hideControlsTimer) clearTimeout(hideControlsTimer);
-  if (osdTimer) clearTimeout(osdTimer);
 });
 </script>
 
 <style scoped>
-/* 基础容器 */
-.view-container { display: flex; flex-direction: column; height: 100%; overflow: hidden; animation: fadeIn 0.3s ease; }
-.view-header { display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; margin-bottom: 1.5rem; }
-.view-title { font-size: 1.75rem; font-weight: 700; color: #111827; margin: 0 0 0.25rem 0; }
-.view-subtitle { color: #6b7280; margin: 0; font-size: 0.95rem; }
-
+/* 包含父组件特有的布局和列表样式 */
+.manual-marker-wrapper { display: flex; flex-direction: column; height: 100%; animation: fadeIn 0.3s ease; overflow: hidden; }
 .header-actions { width: 400px; }
-.input-with-btn { display: flex; gap: 0.5rem; }
-.file-input { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; background: #f9fafb; font-size: 0.85rem; outline: none; }
-.primary-btn { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; transition: background 0.2s;}
-.primary-btn:hover { background: #1d4ed8; }
+.active-file-badge { display: flex; align-items: center; background: #e2e8f0; padding: 0.4rem 0.6rem 0.4rem 1rem; border-radius: 30px; gap: 0.75rem; border: 1px solid #cbd5e1; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); max-width: 450px; margin-left: auto;}
+.file-icon { font-size: 1.2rem; }
+.file-name { font-weight: 600; color: #334155; font-size: 0.9rem; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: monospace;}
+.badge-actions { display: flex; gap: 0.25rem; border-left: 1px solid #cbd5e1; padding-left: 0.5rem;}
 
-.workspace-grid { display: grid; grid-template-columns: 1fr 320px; gap: 1.5rem; flex: 1; min-height: 0; }
-.card { background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; display: flex; flex-direction: column;}
+.marker-container { display: flex; flex: 1; min-height: 0; gap: 1.5rem; transition: all 0.3s;}
+.marker-container.is-fullscreen { gap: 0; }
 
-/* === 播放台 (支持全屏) === */
-.player-card { background-color: #0f172a; border-color: #1e293b; transition: all 0.3s; position: relative;}
-.player-card.is-fullscreen { border-radius: 0; border: none; }
-
-.video-wrapper {
-  flex: 1; min-height: 0; background: #000; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden;
+.list-card { background: #ffffff; width: 320px; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden;}
+.list-header {
+  flex-shrink: 0; padding: 1rem 1.25rem; border-bottom: 1px solid #e5e7eb;
+  display: flex; justify-content: space-between; align-items: center;
+  background: #f9fafb; overflow: hidden; /* 防止溢出 */
 }
-.video-wrapper.hide-cursor { cursor: none; }
-.video-element { width: 100%; height: 100%; object-fit: contain; outline: none; }
+/*.action-btn-group { display: flex; gap: 4px; }*/
+.danger-icon:hover { background: #fee2e2; color: #ef4444; border-radius: 6px;}
+.save-icon:hover { background: #dbeafe; color: #2563eb; border-radius: 6px;}
+.save-icon.pulse { animation: subtle-pulse 2s infinite; }
+@keyframes subtle-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.7; } }
+.list-title { margin: 0; font-size: 1.05rem; font-weight: 700; color: #111827; white-space: nowrap; }
 
-.osd-message {
-  position: absolute; top: 30px; left: 30px; background: rgba(0,0,0,0.6); color: white; padding: 10px 20px;
-  border-radius: 8px; font-size: 1.5rem; font-weight: bold; pointer-events: none; backdrop-filter: blur(4px); z-index: 20;
+
+
+/* 🌟 核心修复：强制不换行，并确保子元素横向居中对齐 */
+.save-actions {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: nowrap; white-space: nowrap; flex-shrink: 0;
 }
+.action-btn-group { display: flex; gap: 4px; align-items: center; }
 
-.play-overlay { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; pointer-events: none; transition: all 0.2s ease-out; z-index: 5;}
-.play-overlay.is-playing { opacity: 0; transform: scale(1.2); }
-.play-icon-center { width: 70px; height: 70px; background: rgba(0,0,0,0.4); backdrop-filter: blur(8px); border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 2.5rem; color: white; padding-left: 8px; border: 1px solid rgba(255,255,255,0.2); }
-
-/* 全屏抽屉 */
-.fullscreen-drawer {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 300px; background: rgba(15,23,42,0.85); backdrop-filter: blur(10px);
-  border-left: 1px solid #334155; display: flex; flex-direction: column; z-index: 30;
-}
-.drawer-header { display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; border-bottom: 1px solid #334155; color: white; }
-.drawer-header h3 { margin: 0; font-size: 1.1rem; }
-.drawer-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; flex: 1; }
-.drawer-list li { padding: 12px 20px; border-bottom: 1px solid #1e293b; cursor: pointer; display: flex; justify-content: space-between; color: #cbd5e1; transition: background 0.2s;}
-.drawer-list li:hover { background: rgba(255,255,255,0.1); color: white; }
-.d-label { font-weight: 600; }
-.d-time { font-family: monospace; color: #94a3b8; }
-
-/* === 悬浮式控制栏 === */
-.video-controls-overlay {
-  position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 20px 15px 20px;
-  background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 60%, transparent 100%);
-  display: flex; flex-direction: column; z-index: 10;
+/* 🌟 优化状态标签，使其高度和图标按钮对齐 */
+.auto-save-indicator {
+  font-size: 0.75rem; color: #10b981; background: #d1fae5;
+  padding: 4px 8px; border-radius: 4px; font-weight: 600;
+  display: inline-block; line-height: 1.5;
 }
 
-/* 极致多色彩进度条 */
-.progress-bar-container { width: 100%; height: 20px; display: flex; align-items: center; cursor: pointer; margin-bottom: 5px; position: relative; }
-.progress-track { width: 100%; height: 4px; border-radius: 2px; position: relative; transition: height 0.1s; }
-.progress-bar-container:hover .progress-track { height: 6px; }
+.auto-save-indicator.saving { color: #6b7280; background: #f3f4f6; }
 
-/* 底层透明白边 */
-.progress-bg { position: absolute; inset: 0; background: rgba(255,255,255,0.2); border-radius: 2px; }
 
-/* 标记的章节色块 */
-.chapter-segment { position: absolute; height: 100%; border-radius: 2px; opacity: 0.8; transition: opacity 0.2s; z-index: 1; }
-.chapter-segment:hover { opacity: 1; cursor: crosshair; }
 
-/* 起始圆点 */
-.chapter-dot { position: absolute; width: 6px; height: 6px; border-radius: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; border: 1px solid rgba(0,0,0,0.5); }
+.list-body { flex: 1; overflow-y: auto; padding: 1rem; }
+.empty-state { text-align: center; color: #6b7280; margin-top: 2rem;}
+.marker-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.marker-item { display: flex; justify-content: space-between; padding: 0.85rem; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; border-left-width: 4px; cursor: pointer;}
+.marker-item:hover { background: #f8fafc; border-color: #cbd5e1; }
+.marker-info { display: flex; flex-direction: column; gap: 6px; overflow: hidden;}
+.marker-header { display: flex; align-items: center; gap: 6px;}
+.marker-index { color: white; font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; font-weight: bold;}
+.marker-label { font-weight: 600; color: #1f2937; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.marker-time { font-family: monospace; font-size: 0.85rem; color: #6b7280; }
+.marker-actions { display: flex; gap: 0.25rem; align-items: center; opacity: 0; transition: opacity 0.2s;}
+.marker-item:hover .marker-actions { opacity: 1; }
 
-/* 草稿入点 */
-.progress-marker-in { position: absolute; width: 4px; height: 140%; background: #fff; top: -20%; border-radius: 2px; z-index: 2; box-shadow: 0 0 4px rgba(0,0,0,0.8);}
+.play-btn { color: #10b981; }
+.play-btn:hover { background: #d1fae5; color: #059669; }
+.delete-btn { color: #ef4444; }
+.delete-btn:hover { background: #fee2e2; color: #b91c1c; }
 
-/* 纯白播放游标，不再有覆盖颜色 */
-.playhead-thumb { position: absolute; width: 14px; height: 14px; background: #fff; border-radius: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 3; box-shadow: 0 0 4px rgba(0,0,0,0.6); pointer-events: none;}
-
-.controls-dashboard { display: flex; justify-content: space-between; align-items: center; margin-top: 8px;}
-.left-controls { display: flex; align-items: center; gap: 1rem; }
-.right-controls { display: flex; align-items: center; gap: 0.75rem; }
-
-.control-icon-btn { background: transparent; border: none; color: white; font-size: 1.4rem; cursor: pointer; transition: color 0.2s;}
-.control-icon-btn:hover { color: #38bdf8; }
-
-.volume-control-horizontal { display: flex; align-items: center; gap: 5px; }
-.volume-slider-wrapper { width: 0; overflow: hidden; transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); display: flex; align-items: center;}
-.volume-slider-wrapper.expanded { width: 80px; }
-.volume-slider { -webkit-appearance: none; width: 75px; height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px; outline: none; margin: 0; cursor: pointer; }
-.volume-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 0 2px rgba(0,0,0,0.5); }
-
-.time-display { font-family: monospace; font-size: 1.1rem; text-shadow: 0 1px 2px rgba(0,0,0,0.8); margin-left: 10px;}
-.current-time { color: #f8fafc; font-weight: 500; }
-.total-time { color: #cbd5e1; margin-left: 4px; }
-
-/* 悬浮倍速菜单 */
-.speed-menu-wrapper { position: relative; }
-.speed-text { background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 6px; font-size: 0.9rem; font-weight: bold; cursor: pointer; outline: none; backdrop-filter: blur(4px);}
-.speed-dropdown { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); background: rgba(15,23,42,0.9); border: 1px solid #334155; border-radius: 8px; padding: 4px 0; display: flex; flex-direction: column; backdrop-filter: blur(8px); z-index: 20;}
-.speed-option { padding: 8px 16px; color: #cbd5e1; font-size: 0.85rem; font-weight: bold; cursor: pointer; transition: background 0.2s; white-space: nowrap;}
-.speed-option:hover { background: rgba(255,255,255,0.1); color: white; }
-.speed-option.active { color: #38bdf8; }
-
-.action-buttons { display: flex; gap: 0.75rem; margin: 0 10px;}
-.mark-btn { background: rgba(255,255,255,0.15); color: #f8fafc; border: 1px solid rgba(255,255,255,0.3); padding: 0.4rem 0.8rem; border-radius: 6px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; transition: all 0.2s; backdrop-filter: blur(4px);}
-.mark-btn:hover { background: rgba(255,255,255,0.25); border-color: #fff; }
-.hotkey { background: rgba(0,0,0,0.4); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-family: monospace; color: #e2e8f0; }
-
-/* 定制化方框 F 全屏图标 */
-.f-box-icon { width: 22px; height: 22px; border: 2px solid white; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 900; font-family: 'Segoe UI', sans-serif; transition: all 0.2s;}
-.fullscreen-btn:hover .f-box-icon { border-color: #38bdf8; color: #38bdf8;}
-
-/* 弹性自适应全屏弹窗 */
+/* 全屏打轴框样式 */
 .fullscreen-draft-modal {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: 90%; max-width: 450px; /* 完美解决超出和换行 */
+  width: 90%; max-width: 450px;
   background: rgba(15,23,42,0.85); border: 1px solid #38bdf8; padding: 2rem; border-radius: 16px;
   backdrop-filter: blur(12px); box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6); text-align: center; z-index: 50;
 }
@@ -807,129 +474,19 @@ onUnmounted(() => {
 .modal-input-group input:focus { border-color: #38bdf8; }
 .modal-input-group button { flex-shrink: 0; padding: 0 1.5rem; background: #38bdf8; border: none; border-radius: 8px; font-weight: bold; font-size: 1rem; cursor: pointer; color: #0f172a; white-space: nowrap;}
 
-/* 窗口模式底部的指示区 (精简) */
-.draft-section { flex-shrink: 0; padding: 1rem; background: #0f172a; border-top: 1px solid #1e293b; display: flex; justify-content: center; height: 60px;}
+.draft-section { flex-shrink: 0; padding: 1rem; background: #f8fafc; border-top: 1px solid #e5e7eb; display: flex; justify-content: center; height: 60px;}
 .draft-time-visual { display: flex; align-items: center; gap: 1rem; }
 .point-box { background: transparent; border-radius: 8px; text-align: center; }
 .point-box .label { font-size: 0.75rem; color: #64748b; margin-right: 8px;}
 .point-box .value { font-family: monospace; font-size: 1.1rem; color: #475569; }
-.point-box .value.highlight { color: #f8fafc; font-weight: bold; }
+.point-box .value.highlight { color: #2563eb; font-weight: bold; }
 .arrow { color: #475569; font-size: 1rem; }
 
-/* 右侧列表卡片 */
-.list-card { background: #ffffff; }
-.list-header { flex-shrink: 0; padding: 1.25rem 1.5rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; background: #f9fafb;}
-.list-title { margin: 0; font-size: 1.05rem; font-weight: 700; color: #111827; }
-.save-btn { padding: 0.4rem 0.8rem; background: white; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer; font-weight: 600; color: #374151;}
-.save-btn.pulse { border-color: #3b82f6; color: #2563eb; background: #eff6ff; animation: subtle-pulse 2s infinite; }
-.list-body { flex: 1; overflow-y: auto; padding: 1rem; }
-.empty-state { text-align: center; color: #6b7280; margin-top: 2rem;}
-.marker-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.list-footer { padding: 1rem 1.5rem; border-top: 1px solid #e5e7eb; background: #f9fafb; flex-shrink: 0;}
+.export-btn { width: 100%; padding: 0.85rem; font-size: 1.05rem; background: linear-gradient(135deg, #2563eb, #1d4ed8); box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2); transition: all 0.3s ease;}
+.export-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 8px -1px rgba(37, 99, 235, 0.3); }
 
-/* 标记列表的颜色联动 */
-.marker-item { display: flex; justify-content: space-between; padding: 0.85rem; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; border-left-width: 4px;}
-.marker-info { display: flex; flex-direction: column; gap: 6px; }
-.marker-index { color: white; font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; font-weight: bold;}
-.marker-label { font-weight: 600; color: #1f2937; margin-left: 6px;}
-.marker-time { font-family: monospace; font-size: 0.85rem; color: #6b7280; }
-.marker-actions { display: flex; gap: 0.25rem; align-items: center;}
-.icon-btn { background: transparent; border: none; cursor: pointer; color: #9ca3af; font-size: 1.1rem;}
-.icon-btn:hover { color: white; }
-.play-btn { color: #10b981; }
-.delete-btn { color: #ef4444; }
-
-.global-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed #d1d5db; color: #6b7280; border-radius: 12px;}
-.toast-message { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); background: #1f2937; color: white; padding: 0.75rem 1.5rem; border-radius: 30px; z-index: 9999; }
-/* 解决图标按钮悬停变白不可见的问题 */
-.icon-btn { background: transparent; border: none; cursor: pointer; font-size: 1.1rem; padding: 4px; border-radius: 4px; transition: all 0.2s;}
-.play-btn { color: #10b981; }
-.play-btn:hover { background: #d1fae5; color: #059669; } /* 浅绿背景，深绿图标 */
-.delete-btn { color: #ef4444; }
-.delete-btn:hover { background: #fee2e2; color: #b91c1c; } /* 浅红背景，深红图标 */
-
-/* 头部关闭按钮和清空按钮样式 */
-.secondary-btn { padding: 0.5rem 1rem; background: #fff; border: 1px solid #d1d5db; border-radius: 6px; color: #374151; font-weight: 600; cursor: pointer;}
-.secondary-btn:hover { background: #f3f4f6; }
-.save-actions { display: flex; align-items: center; gap: 10px; }
-.auto-save-indicator { font-size: 0.75rem; color: #10b981; background: #d1fae5; padding: 4px 8px; border-radius: 4px; font-weight: 600; transition: all 0.3s;}
-.auto-save-indicator.saving { color: #6b7280; background: #f3f4f6; }
-.icon-text-btn { background: none; border: none; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 4px;}
-.icon-text-btn.danger { color: #ef4444; }
-.icon-text-btn.danger:hover { background: #fee2e2; }
-@keyframes subtle-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-.fade-controls-enter-active, .fade-controls-leave-active { transition: opacity 0.3s ease; }
-.fade-controls-enter-from, .fade-controls-leave-to { opacity: 0; }
+.global-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed #d1d5db; color: #6b7280; border-radius: 12px; height: 100%;}
 .zoom-in-enter-active, .zoom-in-leave-active { transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .zoom-in-enter-from, .zoom-in-leave-to { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
-.list-enter-active, .list-leave-active { transition: all 0.3s ease; }
-.list-enter-from, .list-leave-to { opacity: 0; transform: translateX(20px); }
-.slide-right-enter-active, .slide-right-leave-active { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-.slide-right-enter-from, .slide-right-leave-to { opacity: 0; transform: translateX(100%); }
-.fade-fast-enter-active, .fade-fast-leave-active { transition: opacity 0.15s; }
-.fade-fast-enter-from, .fade-fast-leave-to { opacity: 0; transform: translateY(5px); }
-.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-
-
-/* ... */
-.save-actions { display: flex; align-items: center; gap: 10px; }
-.auto-save-indicator {
-  font-size: 0.75rem;
-  color: #6b7280;
-  font-weight: 500;
-  background: #f3f4f6;
-  padding: 4px 8px;
-  border-radius: 4px;
-  animation: fadeIn 0.3s ease;
-}
-
-/* --- 导出按钮与弹窗样式 --- */
-.list-footer {
-  padding: 1rem 1.5rem;
-  border-top: 1px solid #e5e7eb;
-  background: #f9fafb;
-  flex-shrink: 0;
-}
-.export-btn {
-  width: 100%;
-  padding: 0.85rem;
-  font-size: 1.05rem;
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
-  box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
-  transition: all 0.3s ease;
-}
-.export-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 8px -1px rgba(37, 99, 235, 0.3);
-}
-.spinner { display: inline-block; animation: spin 1s linear infinite; margin-right: 8px;}
-@keyframes spin { 100% { transform: rotate(360deg); } }
-
-/* 沉浸式结果弹窗 */
-.export-result-overlay {
-  position: fixed; inset: 0; background: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(4px); z-index: 9999;
-  display: flex; justify-content: center; align-items: center;
-}
-.export-modal-content {
-  background: #ffffff; width: 600px; max-width: 90%; border-radius: 12px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); overflow: hidden;
-  display: flex; flex-direction: column;
-}
-.modal-header {
-  padding: 1.25rem 1.5rem; border-bottom: 1px solid #e5e7eb;
-  display: flex; justify-content: space-between; align-items: center;
-}
-.modal-header h2 { margin: 0; font-size: 1.25rem; color: #111827; }
-.modal-body { padding: 1.5rem; background: #f9fafb; }
-.log-textarea {
-  width: 100%; height: 250px; padding: 1rem; border-radius: 8px;
-  border: 1px solid #d1d5db; background: #1f2937; color: #10b981;
-  font-family: monospace; font-size: 0.9rem; outline: none; resize: none;
-}
-.modal-footer {
-  padding: 1rem 1.5rem; border-top: 1px solid #e5e7eb;
-  display: flex; justify-content: flex-end; gap: 1rem;
-}
-/* ... */
 </style>
