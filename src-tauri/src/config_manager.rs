@@ -37,3 +37,13 @@ pub fn get_config_dir() -> PathBuf {
     let _ = fs::create_dir_all(&dir);
     dir
 }
+
+// src-tauri/src/config_manager.rs
+// ... 保持原有的 get_workspace_dir, get_markers_dir, get_config_dir 不变 ...
+
+/// 获取/初始化 Trash (回收站) 存放目录
+pub fn get_trash_dir() -> PathBuf {
+    let dir = get_workspace_dir().join("Trash");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
