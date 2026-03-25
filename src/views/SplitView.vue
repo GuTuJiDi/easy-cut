@@ -195,9 +195,10 @@ async function runBatchSplit() {
 .pro-tag { font-size: 0.6rem; background: #f59e0b; color: white; padding: 1px 4px; border-radius: 4px; margin-left: 4px; vertical-align: top;}
 
 /* 双栏网格布局 (復用 Turn 6 的高质量布局) */
-.workspace-grid { display: grid; grid-template-columns: 450px 1fr; gap: 1.5rem; flex: 1; min-height: 0; }
+.workspace-grid { display: grid; grid-template-columns: minmax(320px, 450px) 1fr; gap: 1.5rem; flex: 1; min-height: 0; }
 .card { background: #fff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; display: flex; flex-direction: column;}
-.form-card .card-body { padding: 1.5rem; overflow-y: auto;}
+/* 优化表单内容区，移除不必要的滚动条 */
+.form-card .card-body { padding: 1.5rem; } /* 移除了 overflow-y: auto */
 
 .section-title { font-size: 1.05rem; font-weight: 600; margin-bottom: 1rem; color: #111827;}
 .form-group { margin-bottom: 1.25rem; display: flex; flex-direction: column; }
@@ -235,4 +236,19 @@ async function runBatchSplit() {
 .check-icon { color: #10b981; font-weight: bold; margin-right: 4px;}
 .error-msg { color: #dc2626; font-family: monospace; white-space: pre-wrap; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+/* 修复小屏幕下的响应式网格 */
+@media (max-width: 950px) {
+  .workspace-grid {
+    grid-template-columns: 1fr; /* 变为上下单列堆叠 */
+    min-height: auto;
+    overflow-y: visible; /* 移除容器自身的滚动，跟随全局滚动 */
+  }
+  .view-container {
+    overflow-y: auto; /* 让最外层的容器负责统一滚动 */
+  }
+  .form-card, .result-card {
+    min-height: auto; /* 核心修复：移除 450px 的硬编码，让内容自然撑开 */
+    flex-shrink: 0;
+  }
+}
 </style>
