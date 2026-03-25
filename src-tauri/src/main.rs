@@ -3,6 +3,10 @@
 // 引入刚刚新建的模块
 mod video_processor;
 mod marker_manager;
+mod config_manager;
+
+
+
 use std::process::Command;
 use video_processor::{
     execute_ffmpeg_split, get_video_duration, plan_fixed_duration_splits, SplitTask,
@@ -13,6 +17,10 @@ use std::fs;
 use marker_manager::{Marker, save_markers_logic, load_markers_logic};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager}; // <--- 引入 AppHandle
+
+
+
+
 // 定义一个暴露给前端的 Tauri Command
 #[tauri::command]
 async fn check_ffmpeg_status() -> Result<String, String> {
@@ -107,27 +115,37 @@ fn get_app_marker_dir(app: &AppHandle) -> Result<PathBuf, String> {
     data_dir.push("Markers");
     Ok(data_dir)
 }
-// --- 新增：保存标记 (使用 AppHandle 注入) ---
+
+
+// --- 暴露给前端：获取当前工作区路径 ---
 #[tauri::command]
-async fn save_markers(
-    app: AppHandle,
-    video_path: String,
-    markers: Vec<Marker>
-) -> Result<String, String> {
-    let storage_dir = get_app_marker_dir(&app)?;
+fn get_workspace_path() -> String {
+    config_manager::get_workspace_dir().to_string_lossy().to_string()
+}
+
+// --- 更新保存标记的接口（直接使用 ConfigManager 分配的目录） ---
+#[tauri::command]
+async fn save_markers(video_path: String, markers: Vec<Marker>) -> Result<String, String> {
+    let storage_dir = config_manager::get_markers_dir();
     save_markers_logic(&storage_dir, &video_path, markers)
 }
 
-// --- 新增：加载标记 (使用 AppHandle 注入) ---
+// --- 更新加载标记的接口 ---
 #[tauri::command]
-async fn load_markers(
-    app: AppHandle,
-    video_path: String
-) -> Result<Vec<Marker>, String> {
-    let storage_dir = get_app_marker_dir(&app)?;
+async fn load_markers(video_path: String) -> Result<Vec<Marker>, String> {
+    let storage_dir = config_manager::get_markers_dir();
     load_markers_logic(&storage_dir, &video_path)
 }
+
+
+
+
+
 fn main() {
+    // 软件启动时，立刻初始化一次工作区目录，确保文件夹被创建
+    let workspace = config_manager::get_workspace_dir();
+    println!("易剪启动成功！当前工作区路径: {}", workspace.display());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         // 记得把新接口注册进来！
@@ -136,7 +154,8 @@ fn main() {
             split_video,
             batch_split_by_duration,
             save_markers,
-            load_markers  //暴漏给前端的加载标记接口
+            load_markers,  //暴漏给前端的加载标记接口
+            get_workspace_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
