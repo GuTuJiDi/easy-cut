@@ -19,7 +19,7 @@ use video_processor::{
     execute_ffmpeg_split, get_video_duration, plan_fixed_duration_splits, SplitTask,
 }; // <--- 引入 AppHandle
 use settings_manager::{AppSettings, load_settings, save_settings_logic};
-
+use video_processor::ExportResult;
 
 // 定义一个暴露给前端的 Tauri Command
 #[tauri::command]
@@ -194,23 +194,47 @@ async fn move_marker_file_to_trash(video_path: String) -> Result<(), String> {
     trash_manager::move_to_trash(&json_path)
 }
 // --- 新增：核心业务闭环 API (标记联动分割) ---
-#[tauri::command]
-async fn execute_marker_split_task(video_path: String, output_dir: String) -> Result<String, String> {
-    // 1. 从统一定义的工作区获取标记存放目录
+// --- 新增：核心业务闭环 API (标记联动分割) ---
+/*#[tauri::command]
+async fn execute_marker_split_task(video_path: String, output_dir: String) -> Result<ExportResult, String> {
     let storage_dir = config_manager::get_markers_dir();
 
-    // 2. 调用我们之前写好的读取逻辑（内部会自动计算特征码找 JSON）
+    // 强制先获取最新的标记数据
     let markers = match marker_manager::load_markers_logic(&storage_dir, &video_path) {
         Ok(m) => m,
         Err(e) => return Err(format!("❌ 无法读取该视频的配置: {}", e)),
     };
 
     if markers.is_empty() {
-        return Err("⚠️ 该视频没有任何有效的标记片段，请先前往「智能打轴」页面进行标记！".to_string());
+        return Err("⚠️ 该视频没有任何有效的标记片段，请先添加标记！".to_string());
     }
 
-    // 3. 将指令移交给 FFmpeg 处理器
     video_processor::split_video_by_markers(&video_path, &output_dir, markers).await
+}*/
+// --- 修复：将 FFmpeg 阻塞任务丢入专属后台线程池 ---
+#[tauri::command]
+async fn execute_marker_split_task(video_path: String, output_dir: String) -> Result<video_processor::ExportResult, String> {
+    let storage_dir = config_manager::get_markers_dir();
+
+    let markers = match marker_manager::load_markers_logic(&storage_dir, &video_path) {
+        Ok(m) => m,
+        Err(e) => return Err(format!("❌ 无法读取该视频的配置: {}", e)),
+    };
+
+    if markers.is_empty() {
+        return Err("⚠️ 该视频没有任何有效的标记片段，请先添加标记！".to_string());
+    }
+
+    // 🚀 性能核心：使用 spawn_blocking 防止阻塞 Tauri 的主异步引擎
+    // 这能确保在长达几十秒的导出过程中，前端 UI 依然如丝般顺滑！
+    tokio::task::spawn_blocking(move || {
+        // block_on 是因为底层的 split_video_by_markers 是 async 函数
+        tauri::async_runtime::block_on(async {
+            video_processor::split_video_by_markers(&video_path, &output_dir, markers).await
+        })
+    })
+        .await
+        .map_err(|e| format!("线程池执行异常: {}", e))?
 }
 // ... 记得在 main() 的 invoke_handler 里加上 get_video_duration_cmd 和 open_folder
 fn main() {

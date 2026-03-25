@@ -167,11 +167,11 @@
               </span>
             </transition>
 
-            <button class="icon-text-btn danger" @click="clearAllMarkers" v-if="markers.length > 0" title="清空并移入回收站">
+            <button class="icon-text-btn danger" @click="clearAllMarkers" v-if="markers.length > 0" :disabled="isExporting" title="清空并移入回收站">
               🗑️ 清空
             </button>
 
-            <button v-if="!settingsStore.autoSave" class="save-btn" @click="saveMarkers" :disabled="markers.length===0" :class="{'pulse': unsavedChanges}">
+            <button v-if="!settingsStore.autoSave" class="save-btn" @click="saveMarkers" :disabled="markers.length===0 || isExporting" :class="{'pulse': unsavedChanges}">
               💾 手动保存
             </button>
           </div>
@@ -201,6 +201,32 @@
             </transition-group>
           </ul>
         </div>
+        <div class="card list-card" v-show="!isFullscreen">
+          <div class="list-footer" v-if="markers.length > 0">
+            <button class="primary-btn export-btn" @click="exportMarkers" :disabled="isExporting">
+              <span v-if="isExporting" class="spinner">⚙️</span>
+              {{ isExporting ? '正在极速切片中...' : '🚀 一键导出全部片段' }}
+            </button>
+          </div>
+        </div>
+
+        <transition name="zoom-in">
+          <div class="export-result-overlay" v-if="showExportModal">
+            <div class="export-modal-content">
+              <div class="modal-header">
+                <h2>🎉 导出完成</h2>
+                <button class="icon-btn" @click="showExportModal = false">✖</button>
+              </div>
+              <div class="modal-body">
+                <textarea class="log-textarea" readonly :value="exportLogs"></textarea>
+              </div>
+              <div class="modal-footer">
+                <button class="secondary-btn" @click="showExportModal = false">关闭</button>
+                <button class="primary-btn" @click="openExportFolder">📂 打开所在文件夹</button>
+              </div>
+            </div>
+          </div>
+        </transition>
       </div>
     </div>
 
@@ -533,7 +559,89 @@ function handleKeyDown(e: KeyboardEvent) {
       showControls.value = true; resetHideTimer(); triggerOSD(e.shiftKey ? "⏩ +1s" : "⏩ +5s"); break;
   }
 }
+// --- 导出逻辑所需状态 ---
+const isExporting = ref(false);
+const showExportModal = ref(false);
+const exportLogs = ref('');
+const finalExportDir = ref('');
 
+// --- 核心闭环：执行导出 ---
+/*async function exportMarkers() {
+  // 1. 如果有未保存的改动，强制先保存一次，确保后端读取的是最新 JSON
+  if (unsavedChanges.value) {
+    try {
+      await invoke('save_markers', { videoPath: videoPath.value, markers: markers.value });
+      unsavedChanges.value = false;
+    } catch (e) {
+      showToast("⚠️ 自动保存失败，可能导致导出旧数据");
+    }
+  }
+
+  // 2. 呼出系统弹窗，让用户选择保存到哪里
+  const outDir = await open({ directory: true, multiple: false });
+  if (!outDir || typeof outDir !== 'string') return;
+
+  // 3. 启动全屏遮罩加载状态
+  isExporting.value = true;
+  triggerOSD("🚀 FFmpeg 极速引擎启动...");
+
+  try {
+    // 4. 调用刚才写的 Rust 核心引擎
+    const result = await invoke<{logs: string, target_dir: string}>('execute_marker_split_task', {
+      videoPath: videoPath.value,
+      outputDir: outDir
+    });
+
+    // 5. 渲染结果
+    exportLogs.value = result.logs;
+    finalExportDir.value = result.target_dir;
+    showExportModal.value = true;
+  } catch (error) {
+    alert(`❌ 导出发生致命错误:\n${error}`);
+  } finally {
+    isExporting.value = false;
+  }
+}*/
+async function exportMarkers() {
+  // 1. 呼出系统弹窗，让用户选择保存到哪里 (这步极快)
+  const outDir = await open({ directory: true, multiple: false });
+  if (!outDir || typeof outDir !== 'string') return;
+
+  // 2. 🚀 UI 防呆锁死：开启遮罩，阻止任何其他操作
+  isExporting.value = true;
+  triggerOSD("🚀 开始提取...");
+
+  // 3. 强制清空自动保存定时器，防止冲突！
+  if (autoSaveTimer) window.clearTimeout(autoSaveTimer);
+
+  // 4. 安全执行导出
+  try {
+    const result = await invoke<{logs: string, target_dir: string}>('execute_marker_split_task', {
+      videoPath: videoPath.value,
+      outputDir: outDir
+    });
+
+    exportLogs.value = result.logs;
+    finalExportDir.value = result.target_dir;
+    showExportModal.value = true;
+  } catch (error) {
+    alert(`❌ 导出失败:\n${error}`);
+  } finally {
+    isExporting.value = false;
+    triggerOSD("✅ 提取任务结束");
+  }
+}
+// --- 打开导出的专属文件夹 ---
+async function openExportFolder() {
+  if (finalExportDir.value) {
+    try {
+      await invoke('open_folder', { path: finalExportDir.value });
+      showExportModal.value = false; // 打开后顺便关掉弹窗
+    } catch (e) {
+      showToast("无法打开目录");
+    }
+  }
+}
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
   document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -744,6 +852,55 @@ onUnmounted(() => {
   padding: 4px 8px;
   border-radius: 4px;
   animation: fadeIn 0.3s ease;
+}
+
+/* --- 导出按钮与弹窗样式 --- */
+.list-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #e5e7eb;
+  background: #f9fafb;
+  flex-shrink: 0;
+}
+.export-btn {
+  width: 100%;
+  padding: 0.85rem;
+  font-size: 1.05rem;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
+  transition: all 0.3s ease;
+}
+.export-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 8px -1px rgba(37, 99, 235, 0.3);
+}
+.spinner { display: inline-block; animation: spin 1s linear infinite; margin-right: 8px;}
+@keyframes spin { 100% { transform: rotate(360deg); } }
+
+/* 沉浸式结果弹窗 */
+.export-result-overlay {
+  position: fixed; inset: 0; background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(4px); z-index: 9999;
+  display: flex; justify-content: center; align-items: center;
+}
+.export-modal-content {
+  background: #ffffff; width: 600px; max-width: 90%; border-radius: 12px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.modal-header {
+  padding: 1.25rem 1.5rem; border-bottom: 1px solid #e5e7eb;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.modal-header h2 { margin: 0; font-size: 1.25rem; color: #111827; }
+.modal-body { padding: 1.5rem; background: #f9fafb; }
+.log-textarea {
+  width: 100%; height: 250px; padding: 1rem; border-radius: 8px;
+  border: 1px solid #d1d5db; background: #1f2937; color: #10b981;
+  font-family: monospace; font-size: 0.9rem; outline: none; resize: none;
+}
+.modal-footer {
+  padding: 1rem 1.5rem; border-top: 1px solid #e5e7eb;
+  display: flex; justify-content: flex-end; gap: 1rem;
 }
 /* ... */
 </style>

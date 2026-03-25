@@ -47,7 +47,7 @@ pub struct VideoMarkerData {
 //     Ok(format!("{:x}", result))
 // }
 // src-tauri/src/marker_manager.rs
-pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
+/*pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
     use std::fs::File;
     use std::io::Read;
     use sha2::{Sha256, Digest};
@@ -67,6 +67,30 @@ pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
         hasher.update(&buffer[..n]);
     }
 
+    Ok(format!("{:x}", hasher.finalize()))
+}*/
+// --- 修复：极速计算视频指纹 (耗时 < 1ms) ---
+pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
+    use std::fs;
+    use sha2::{Sha256, Digest};
+
+    // 1. 仅读取文件的元数据 (大小、修改时间)，绝对不读取文件内容！
+    let metadata = fs::metadata(video_path)
+        .map_err(|e| format!("无法读取文件元数据: {}", e))?;
+
+    let file_size = metadata.len();
+    let modified_time = metadata.modified()
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // 2. 将 路径 + 大小 + 修改时间 拼接成字符串
+    let unique_str = format!("{}_{}_{}", video_path, file_size, modified_time);
+
+    // 3. 对这个极短的字符串进行 Hash
+    let mut hasher = Sha256::new();
+    hasher.update(unique_str.as_bytes());
     Ok(format!("{:x}", hasher.finalize()))
 }
 // --- 存储业务逻辑 ---
