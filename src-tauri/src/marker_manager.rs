@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use sha2::{Sha256, Digest};
 
 // --- 数据模型 ---
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -26,10 +26,10 @@ pub struct VideoMarkerData {
 // --- 核心指纹算法 ---
 /// 计算极速视频指纹：取文件大小 + 头部 1MB 数据进行 SHA-256 运算
 pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
-    let mut file = File::open(video_path)
-        .map_err(|e| format!("无法读取视频文件: {}", e))?;
+    let mut file = File::open(video_path).map_err(|e| format!("无法读取视频文件: {}", e))?;
 
-    let metadata = file.metadata()
+    let metadata = file
+        .metadata()
         .map_err(|e| format!("无法获取视频元数据: {}", e))?;
     let file_size = metadata.len();
 
@@ -49,11 +49,15 @@ pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
 
 // --- 存储业务逻辑 ---
 /// 获取集中存储目录下的专属 JSON 路径
-fn get_json_path(storage_dir: &Path, fingerprint: &str) -> PathBuf {
+pub fn get_json_path(storage_dir: &Path, fingerprint: &str) -> PathBuf {
     storage_dir.join(format!("{}.json", fingerprint))
 }
 
-pub fn save_markers_logic(storage_dir: &Path, video_path: &str, markers: Vec<Marker>) -> Result<String, String> {
+pub fn save_markers_logic(
+    storage_dir: &Path,
+    video_path: &str,
+    markers: Vec<Marker>,
+) -> Result<String, String> {
     // 1. 确保存储目录存在 (如 AppData/Local/EasyCut/Markers)
     if !storage_dir.exists() {
         fs::create_dir_all(storage_dir).map_err(|e| format!("创建存储目录失败: {}", e))?;
@@ -68,11 +72,10 @@ pub fn save_markers_logic(storage_dir: &Path, video_path: &str, markers: Vec<Mar
         original_video_path: video_path.to_string(),
         markers,
     };
-    let json_string = serde_json::to_string_pretty(&data)
-        .map_err(|e| format!("序列化 JSON 失败: {}", e))?;
+    let json_string =
+        serde_json::to_string_pretty(&data).map_err(|e| format!("序列化 JSON 失败: {}", e))?;
 
-    fs::write(&json_path, json_string)
-        .map_err(|e| format!("写入配置文件失败: {}", e))?;
+    fs::write(&json_path, json_string).map_err(|e| format!("写入配置文件失败: {}", e))?;
 
     Ok(json_path.to_string_lossy().into_owned())
 }
@@ -85,11 +88,11 @@ pub fn load_markers_logic(storage_dir: &Path, video_path: &str) -> Result<Vec<Ma
         return Ok(Vec::new()); // 没有找到历史标记，返回空数组
     }
 
-    let json_string = fs::read_to_string(&json_path)
-        .map_err(|e| format!("读取配置文件失败: {}", e))?;
+    let json_string =
+        fs::read_to_string(&json_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
 
-    let data: VideoMarkerData = serde_json::from_str(&json_string)
-        .map_err(|e| format!("解析 JSON 格式失败: {}", e))?;
+    let data: VideoMarkerData =
+        serde_json::from_str(&json_string).map_err(|e| format!("解析 JSON 格式失败: {}", e))?;
 
     Ok(data.markers)
 }
@@ -114,16 +117,24 @@ mod tests {
         let mut file = File::create(&dummy_video_path).unwrap();
         file.write_all(b"mock video binary data").unwrap();
 
-        let test_markers = vec![
-            Marker { id: "1".into(), start_time: 0.0, end_time: 10.0, label: "片段A".into() }
-        ];
+        let test_markers = vec![Marker {
+            id: "1".into(),
+            start_time: 0.0,
+            end_time: 10.0,
+            label: "片段A".into(),
+        }];
 
         // 测试保存
-        let save_result = save_markers_logic(&mock_storage_dir, &dummy_video_path.to_string_lossy(), test_markers);
+        let save_result = save_markers_logic(
+            &mock_storage_dir,
+            &dummy_video_path.to_string_lossy(),
+            test_markers,
+        );
         assert!(save_result.is_ok());
 
         // 测试读取 (即便视频文件被移动到别的文件夹，只要文件内容没变，读取依然应该成功！这里模拟验证逻辑)
-        let loaded = load_markers_logic(&mock_storage_dir, &dummy_video_path.to_string_lossy()).unwrap();
+        let loaded =
+            load_markers_logic(&mock_storage_dir, &dummy_video_path.to_string_lossy()).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].label, "片段A");
 

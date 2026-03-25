@@ -1,24 +1,24 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // 引入刚刚新建的模块
-mod video_processor;
-mod marker_manager;
 mod config_manager;
+mod marker_manager;
+mod video_processor;
+mod settings_manager; // <--- 引入模块
+mod trash_manager;    // <--- 引入模块
 
 
-
+use marker_manager::{get_json_path,load_markers_logic, save_markers_logic, Marker};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
+use tauri::{AppHandle, Manager};
 use video_processor::{
     execute_ffmpeg_split, get_video_duration, plan_fixed_duration_splits, SplitTask,
-};
-use serde::{Deserialize, Serialize};
-use std::path::Path;
-use std::fs;
-use marker_manager::{Marker, save_markers_logic, load_markers_logic};
-use std::path::PathBuf;
-use tauri::{AppHandle, Manager}; // <--- 引入 AppHandle
-
-
+}; // <--- 引入 AppHandle
+use settings_manager::{AppSettings, load_settings, save_settings_logic};
 
 
 // 定义一个暴露给前端的 Tauri Command
@@ -68,9 +68,9 @@ async fn split_video(
 async fn batch_split_by_duration(
     input_path: String,
     // base_output_name: String, // 比如 "D:\Desktop\先导片"，代码会自动加上 _part1.mp4
-    output_dir: String,  //只接收目录路径
-    video_name: String, //视频基础名称，不带扩展名
-    segment_duration: u32,    // 每段时长（秒），比如 30
+    output_dir: String,    //只接收目录路径
+    video_name: String,    //视频基础名称，不带扩展名
+    segment_duration: u32, // 每段时长（秒），比如 30
 ) -> Result<String, String> {
     println!("开始分析视频: {}", input_path);
 
@@ -91,7 +91,10 @@ async fn batch_split_by_duration(
 
     // 3. 构建任务并指定最终的输出基础路径
     // base_name 会变成: D:\Desktop\jianji\20231024.先导片\20231024.先导片
-    let base_name = target_folder.join(&video_name).to_string_lossy().to_string();
+    let base_name = target_folder
+        .join(&video_name)
+        .to_string_lossy()
+        .to_string();
     let tasks = plan_fixed_duration_splits(total_duration, segment_duration, &base_name);
 
     // 4. 循环执行切割
@@ -108,7 +111,9 @@ async fn batch_split_by_duration(
 /// 辅助函数：获取本软件专属的标记数据存储目录
 fn get_app_marker_dir(app: &AppHandle) -> Result<PathBuf, String> {
     // 获取标准的 App Local Data 目录
-    let mut data_dir = app.path().app_local_data_dir()
+    let mut data_dir = app
+        .path()
+        .app_local_data_dir()
         .map_err(|_| "无法获取系统应用数据目录".to_string())?;
 
     // 追加子目录: /Markers
@@ -116,11 +121,12 @@ fn get_app_marker_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir)
 }
 
-
 // --- 暴露给前端：获取当前工作区路径 ---
 #[tauri::command]
 fn get_workspace_path() -> String {
-    config_manager::get_workspace_dir().to_string_lossy().to_string()
+    config_manager::get_workspace_dir()
+        .to_string_lossy()
+        .to_string()
 }
 
 // --- 更新保存标记的接口（直接使用 ConfigManager 分配的目录） ---
@@ -136,16 +142,62 @@ async fn load_markers(video_path: String) -> Result<Vec<Marker>, String> {
     let storage_dir = config_manager::get_markers_dir();
     load_markers_logic(&storage_dir, &video_path)
 }
+// --- 新增 1：获取视频总时长给前端展示 ---
+#[tauri::command]
+async fn get_video_duration_cmd(video_path: String) -> Result<u32, String> {
+    // 复用我们之前写在 video_processor 里的探针函数
+    video_processor::get_video_duration(&video_path)
+}
+
+// --- 新增 2：打开操作系统的目标文件夹 ---
+#[tauri::command]
+async fn open_folder(path: String) -> Result<(), String> {
+    match open::that(&path) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("无法打开文件夹: {}", e)),
+    }
+}
+// --- 新增：读取设置 API ---
+#[tauri::command]
+fn get_app_settings() -> AppSettings {
+    load_settings()
+}
+
+// --- 新增：保存设置 API ---
+#[tauri::command]
+fn update_app_settings(settings: AppSettings) -> Result<(), String> {
+    save_settings_logic(&settings)
+}
+
+// --- 修复后：软删除 JSON 文件 API (移入回收站) ---
+#[tauri::command]
+fn move_marker_file_to_trash(video_path: String) -> Result<(), String> {
+    // 1. 获取标记文件的专门存储目录 (EasyCut_Data/Markers)
+    let storage_dir = config_manager::get_markers_dir();
+
+    // 2. 先计算视频的唯一指纹 (因为该函数返回 Result，所以这里可以使用 ?)
+    let fingerprint = marker_manager::calculate_video_fingerprint(&video_path)?;
+
+    // 3. 传入目录和指纹，获取准确的 JSON 物理路径 (直接返回 PathBuf，无需 ?)
+    let json_path = marker_manager::get_json_path(&storage_dir, &fingerprint);
+
+    // 4. 将其安全移动到回收站
+    trash_manager::move_to_trash(&json_path)
+}
 
 
-
-
-
+// ... 记得在 main() 的 invoke_handler 里加上 get_video_duration_cmd 和 open_folder
 fn main() {
     // 软件启动时，立刻初始化一次工作区目录，确保文件夹被创建
     let workspace = config_manager::get_workspace_dir();
     println!("易剪启动成功！当前工作区路径: {}", workspace.display());
-
+    // 2. 读取配置，并触发后台回收站清理守护任务
+    let settings = load_settings();
+    match trash_manager::clean_expired_trash(settings.trash_retention_days) {
+        Ok(count) if count > 0 => println!("🧹 启动清理：自动移除了 {} 个过期废弃的标记文件。", count),
+        Err(e) => eprintln!("⚠️ 回收站清理异常: {}", e),
+        _ => {} // count == 0 或者不清理，静默通过
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         // 记得把新接口注册进来！
@@ -154,8 +206,13 @@ fn main() {
             split_video,
             batch_split_by_duration,
             save_markers,
-            load_markers,  //暴漏给前端的加载标记接口
-            get_workspace_path
+            load_markers, //暴漏给前端的加载标记接口
+            get_workspace_path,
+            get_video_duration_cmd,
+            open_folder,
+            get_app_settings,
+            update_app_settings,
+            move_marker_file_to_trash,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
