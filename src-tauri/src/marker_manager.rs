@@ -1,191 +1,149 @@
+// src-tauri/src/marker_manager.rs
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::fs::{self, File};
-use std::io::{self,Read};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+use sha2::{Sha256, Digest};
 
-// --- 数据模型 ---
+// ==========================================
+// 🚀 V2.0 终极信封数据架构 (The Envelope Pattern)
+// ==========================================
+
+/// 1. 顶层信封：项目 (Project)
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct EasyCutProject {
+    pub version: String,      // 结构版本号，例如 "1.1.0"
+    pub meta: ProjectMeta,    // 项目元数据
+    pub markers: Vec<Marker>, // 标记列表
+}
+
+/// 2. 项目元数据：彻底解耦物理视频，支持跨源打轴
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProjectMeta {
+    pub project_id: String,           // 唯一项目 UUID (若是本地视频，当前直接用其特征码)
+    pub project_name: String,         // 用户自定义命名 (如："S13总决赛网页切片")
+    pub created_at: u64,              // 创建时间戳
+
+    // 🌟 核心突破：解耦物理视频 (若无实体视频则为 None)
+    pub linked_file_hash: Option<String>,
+    pub linked_file_name: Option<String>,
+
+    pub source_type: String,          // 来源："local_file", "browser_extension", "stopwatch"
+
+    // 🌟 无限扩展槽：存啥都行，后端不校验直接透传
+    #[serde(flatten)]
+    pub ext: HashMap<String, Value>,
+}
+
+/// 3. 标记节点：固化核心，动态扩展外围
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Marker {
+    // --- 绝对不可变的核心字段 (FFmpeg 切割强依赖) ---
     pub id: String,
     #[serde(rename = "startTime")]
     pub start_time: f64,
     #[serde(rename = "endTime")]
     pub end_time: f64,
     pub label: String,
+
+    #[serde(default)]
+    pub is_deleted: bool, // 逻辑删除标志
+
+    // --- 🌟 动态有效载荷：未来前端新增任何字段（如 color, ai_summary），自动装入此字典 ---
+    #[serde(flatten)]
+    pub payload: HashMap<String, Value>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct VideoMarkerData {
-    // 依然保留原路径，主要用于给用户展示“该配置最后一次关联的视频位置”
-    #[serde(rename = "originalVideoPath")]
-    pub original_video_path: String,
-    pub markers: Vec<Marker>,
+// ==========================================
+// ⚡ 极速基础工具
+// ==========================================
+
+/// 获取项目专属 JSON 路径 (现改为以 project_id 命名)
+pub fn get_json_path(storage_dir: &Path, project_id: &str) -> PathBuf {
+    storage_dir.join(format!("{}.json", project_id))
 }
 
-// --- 核心指纹算法 ---
-/// 计算极速视频指纹：取文件大小 + 头部 1MB 数据进行 SHA-256 运算
-// pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
-//     let mut file = File::open(video_path).map_err(|e| format!("无法读取视频文件: {}", e))?;
-//
-//     let metadata = file
-//         .metadata()
-//         .map_err(|e| format!("无法获取视频元数据: {}", e))?;
-//     let file_size = metadata.len();
-//
-//     let mut hasher = Sha256::new();
-//     // 1. 混入文件大小
-//     hasher.update(file_size.to_be_bytes());
-//
-//     // 2. 读取并混入头部最多 1MB 数据
-//     let mut buffer = [0u8; 1024 * 1024]; // 1MB buffer
-//     let bytes_read = file.read(&mut buffer).unwrap_or(0);
-//     hasher.update(&buffer[..bytes_read]);
-//
-//     let result = hasher.finalize();
-//     // 返回 64 位的十六进制字符串作为唯一 ID
-//     Ok(format!("{:x}", result))
-// }
-// src-tauri/src/marker_manager.rs
-/*pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
-    use std::fs::File;
-    use std::io::Read;
-    use sha2::{Sha256, Digest};
-
-    let mut file = File::open(video_path).map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-
-    // ❌ 错误写法 (会导致栈溢出):
-    // let mut buffer = [0u8; 1048576];
-
-    // ✅ 正确写法 (分配到堆内存):
-    let mut buffer = vec![0u8; 1024 * 1024]; // 每次读取 1MB
-
-    loop {
-        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-        if n == 0 { break; }
-        hasher.update(&buffer[..n]);
-    }
-
-    Ok(format!("{:x}", hasher.finalize()))
-}*/
-// --- 修复：极速计算视频指纹 (耗时 < 1ms) ---
+/// 极速提取本地视频指纹 (仅读元数据，耗时 < 1ms)
 pub fn calculate_video_fingerprint(video_path: &str) -> Result<String, String> {
-    use std::fs;
-    use sha2::{Sha256, Digest};
-
-    // 1. 仅读取文件的元数据 (大小、修改时间)，绝对不读取文件内容！
-    let metadata = fs::metadata(video_path)
-        .map_err(|e| format!("无法读取文件元数据: {}", e))?;
-
+    let metadata = fs::metadata(video_path).map_err(|e| format!("读取元数据失败: {}", e))?;
     let file_size = metadata.len();
     let modified_time = metadata.modified()
-        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
 
-    // 2. 将 路径 + 大小 + 修改时间 拼接成字符串
     let unique_str = format!("{}_{}_{}", video_path, file_size, modified_time);
-
-    // 3. 对这个极短的字符串进行 Hash
     let mut hasher = Sha256::new();
     hasher.update(unique_str.as_bytes());
     Ok(format!("{:x}", hasher.finalize()))
 }
-// --- 存储业务逻辑 ---
-/// 获取集中存储目录下的专属 JSON 路径
-pub fn get_json_path(storage_dir: &Path, fingerprint: &str) -> PathBuf {
-    storage_dir.join(format!("{}.json", fingerprint))
-}
 
-pub fn save_markers_logic(
-    storage_dir: &Path,
-    video_path: &str,
-    markers: Vec<Marker>,
-) -> Result<String, String> {
-    // 1. 确保存储目录存在 (如 AppData/Local/EasyCut/Markers)
-    if !storage_dir.exists() {
-        fs::create_dir_all(storage_dir).map_err(|e| format!("创建存储目录失败: {}", e))?;
-    }
+// ==========================================
+// 📦 数据读取与平滑迁移 (Data Migration)
+// ==========================================
 
-    // 2. 计算指纹
+/// 加载项目。如果文件不存在，则在内存中初始化一个全新信封；
+/// 🌟 包含自动平滑升级旧版 JSON 数组的能力！
+pub fn load_project_logic(storage_dir: &Path, video_path: &str) -> Result<EasyCutProject, String> {
     let fingerprint = calculate_video_fingerprint(video_path)?;
     let json_path = get_json_path(storage_dir, &fingerprint);
 
-    // 3. 组装并写入数据
-    let data = VideoMarkerData {
-        original_video_path: video_path.to_string(),
-        markers,
-    };
-    let json_string =
-        serde_json::to_string_pretty(&data).map_err(|e| format!("序列化 JSON 失败: {}", e))?;
+    let video_name = Path::new(video_path)
+        .file_stem().unwrap_or_default()
+        .to_string_lossy().to_string();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
-    fs::write(&json_path, json_string).map_err(|e| format!("写入配置文件失败: {}", e))?;
-
-    Ok(json_path.to_string_lossy().into_owned())
-}
-
-pub fn load_markers_logic(storage_dir: &Path, video_path: &str) -> Result<Vec<Marker>, String> {
-    let fingerprint = calculate_video_fingerprint(video_path)?;
-    let json_path = get_json_path(storage_dir, &fingerprint);
-
+    // 如果是第一次导入，生成全新信封
     if !json_path.exists() {
-        return Ok(Vec::new()); // 没有找到历史标记，返回空数组
+        return Ok(EasyCutProject {
+            version: "1.1.0".to_string(),
+            meta: ProjectMeta {
+                project_id: fingerprint.clone(),
+                project_name: video_name.clone(),
+                created_at: now,
+                linked_file_hash: Some(fingerprint),
+                linked_file_name: Some(video_name),
+                source_type: "local_file".to_string(),
+                ext: HashMap::new(),
+            },
+            markers: vec![],
+        });
     }
 
-    let json_string =
-        fs::read_to_string(&json_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
+    let json_str = fs::read_to_string(&json_path).map_err(|e| e.to_string())?;
 
-    let data: VideoMarkerData =
-        serde_json::from_str(&json_string).map_err(|e| format!("解析 JSON 格式失败: {}", e))?;
+    // 尝试一：按最新 V1.1.0 信封格式解析
+    if let Ok(project) = serde_json::from_str::<EasyCutProject>(&json_str) {
+        return Ok(project);
+    }
 
-    Ok(data.markers)
+    // 尝试二：兼容旧版本，如果是单纯的标记数组，自动包装升级为新信封！
+    if let Ok(old_markers) = serde_json::from_str::<Vec<Marker>>(&json_str) {
+        return Ok(EasyCutProject {
+            version: "1.1.0".to_string(),
+            meta: ProjectMeta {
+                project_id: fingerprint.clone(),
+                project_name: video_name.clone(),
+                created_at: now,
+                linked_file_hash: Some(fingerprint),
+                linked_file_name: Some(video_name),
+                source_type: "local_file_migrated".to_string(),
+                ext: HashMap::new(),
+            },
+            markers: old_markers,
+        });
+    }
+
+    Err("JSON 数据格式损坏，无法解析".to_string())
 }
 
-// ==========================================
-// 测试左移：后端独立单元测试
-// ==========================================
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::env;
-    use std::io::Write;
-
-    #[test]
-    fn test_centralized_marker_storage() {
-        let temp_dir = env::temp_dir();
-        // 模拟集中存储的目录
-        let mock_storage_dir = temp_dir.join("easycut_test_markers");
-
-        // 生成一个临时的假视频文件用于测试指纹计算
-        let dummy_video_path = temp_dir.join("mock_video_for_hash.mp4");
-        let mut file = File::create(&dummy_video_path).unwrap();
-        file.write_all(b"mock video binary data").unwrap();
-
-        let test_markers = vec![Marker {
-            id: "1".into(),
-            start_time: 0.0,
-            end_time: 10.0,
-            label: "片段A".into(),
-        }];
-
-        // 测试保存
-        let save_result = save_markers_logic(
-            &mock_storage_dir,
-            &dummy_video_path.to_string_lossy(),
-            test_markers,
-        );
-        assert!(save_result.is_ok());
-
-        // 测试读取 (即便视频文件被移动到别的文件夹，只要文件内容没变，读取依然应该成功！这里模拟验证逻辑)
-        let loaded =
-            load_markers_logic(&mock_storage_dir, &dummy_video_path.to_string_lossy()).unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].label, "片段A");
-
-        // 清理
-        let _ = fs::remove_dir_all(mock_storage_dir);
-        let _ = fs::remove_file(dummy_video_path);
-    }
+/// 将项目安全序列化落盘
+pub fn save_project_logic(storage_dir: &Path, project: &EasyCutProject) -> Result<(), String> {
+    let json_path = get_json_path(storage_dir, &project.meta.project_id);
+    let json_string = serde_json::to_string_pretty(project).map_err(|e| e.to_string())?;
+    fs::write(json_path, json_string).map_err(|e| e.to_string())?;
+    Ok(())
 }

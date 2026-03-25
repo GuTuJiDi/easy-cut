@@ -60,67 +60,6 @@ onMounted(() => {
 </script>
 
 <style>
-/* ========================================= */
-/* 🌍 核心通用全局样式 (V2.0 布局规范)           */
-/* 用于解决通用 Class 在具体页面组件内不起效的问题 */
-/* ========================================= */
-
-/* 1. 基础重置 */
-html, body { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; background-color: #f3f4f6; overflow: hidden; }
-#app { height: 100vh; }
-.app-container { display: flex; height: 100vh; overflow: hidden; width: 100vw; }
-
-/* 2. 主内容区核心自适应约束 (修复挤压问题) */
-.main-content {
-  flex: 1;
-  overflow-y: hidden; /* 让子组件自己负责垂直滚动，防止全局和局部滚动条冲突 */
-  position: relative;
-  background: #f3f4f6;
-  min-width: 0; /* 极其重要：允许父容器压缩，让子组件应用 min-width 底线限制 */
-}
-
-/* 3. 🛡️ 易剪 V2.0 通用布局 Class 规范 */
-/* 以后任何新页面，请直接套用这些 Class，绝不需要在组件内再调布局 */
-
-.view-container {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  padding: 2rem; /* 统一间距规范 */
-  box-sizing: border-box;
-  animation: fadeIn 0.3s ease;
-  overflow-y: auto; /* 让最外层的容器负责统一滚动 */
-}
-
-/* 通用 Header 规范 (移除 margin-left) */
-.view-header { margin-bottom: 2rem; flex-shrink: 0; }
-.view-title { font-size: 1.75rem; font-weight: 700; color: #111827; margin: 0 0 0.25rem 0; letter-spacing: -0.5px;}
-.view-subtitle { color: #6b7280; margin: 0; font-size: 0.95rem; }
-
-/* 通用 卡片（Card）样式规范 */
-.card {
-  background: #ffffff;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.02);
-}
-.card.padded { padding: 1.5rem; }
-
-/* 通用 OSD / Toast / 过渡效果 */
-@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-.fade-page-enter-active, .fade-page-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
-.fade-page-enter-from { opacity: 0; transform: translateY(10px); }
-.fade-page-leave-to { opacity: 0; transform: translateY(-10px); }
-.fade-fast-enter-active, .fade-fast-leave-active { transition: opacity 0.15s ease-in-out; }
-.fade-fast-enter-from, .fade-fast-leave-to { opacity: 0; }
-
-/* ========================================= */
-/* 🧱 App Shell 独有样式                      */
-/* ========================================= */
-
 .sidebar { width: 240px; background-color: #fcfcfd; border-right: 1px solid #e5e7eb; display: flex; flex-direction: column; z-index: 10; transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); white-space: nowrap; overflow: hidden; position: relative;}
 .sidebar.is-collapsed { width: 72px; }
 
