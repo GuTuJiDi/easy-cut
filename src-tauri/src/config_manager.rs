@@ -17,7 +17,10 @@ pub fn get_workspace_dir() -> PathBuf {
     }
 
     // 策略 2：安全回退模式。放到系统标准的 "我的文档 (Documents)/EasyCut_Data" 中
-    let docs_dir = dirs::document_dir().unwrap_or_else(|| PathBuf::from("C:\\"));
+    let docs_dir = dirs::document_dir()
+        .or_else(|| dirs::home_dir()) // 跨平台：先尝试回退到用户主目录
+        .unwrap_or_else(|| PathBuf::from(".")); // 终极回退：当前相对目录
+
     let workspace_dir = docs_dir.join("EasyCut_Data");
 
     let _ = fs::create_dir_all(&workspace_dir);

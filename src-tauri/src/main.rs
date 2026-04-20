@@ -1,35 +1,57 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// 引入刚刚新建的模块
+
 mod config_manager;
 mod marker_manager;
 mod video_processor;
-mod settings_manager; // <--- 引入模块
-mod trash_manager;    // <--- 引入模块
+mod settings_manager;
+mod trash_manager;
+mod auth;
+mod workflow_orchestrator; // 🌟 引入中枢大脑
+
 use marker_manager::EasyCutProject;
-
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-use tauri::{AppHandle, Manager};
-use video_processor::{
-    execute_ffmpeg_split, get_video_duration, plan_fixed_duration_splits, SplitTask,
-}; // <--- 引入 AppHandle
+use std::process::Command; // 仅保留给探测操作
+use tauri::{AppHandle, Manager, State}; // 🟢 新增了 State 用于依赖注入
+use tokio::sync::broadcast;             // 🟢 新增：广播频道，用于发送取消信号
 use settings_manager::{AppSettings, load_settings, save_settings_logic};
-use video_processor::ExportResult;
 
-// 定义一个暴露给前端的 Tauri Command
+// ==========================================
+// 🛡️ 新增：全局任务控制大闸 (The Kill Switch)
+// ==========================================
+
+/// 通用包裹器：让任意长时间运行的异步任务具备“可被取消”的能力
+async fn run_with_cancellation<T>(
+    cancel_tx: State<'_, broadcast::Sender<()>>,
+    task_future: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let mut rx = cancel_tx.subscribe();
+    tokio::select! {
+        // 正常执行路径：如果 task_future 先完成，返回其结果
+        res = task_future => res,
+        // 取消信号路径：如果先收到前端的取消广播，强制中断并报错
+        _ = rx.recv() => Err("🛑 任务已被用户主动取消".to_string()),
+    }
+}
+
+/// 供前端调用的取消指令
+#[tauri::command]
+async fn cancel_active_tasks(cancel_tx: State<'_, broadcast::Sender<()>>) -> Result<(), String> {
+    let _ = cancel_tx.send(()); // 发送核弹信号，所有监听此频道的任务都会被 Drop
+    println!("🛑 接收到前端中止指令，正在清理底层 FFmpeg 进程...");
+    Ok(())
+}
+
+// ==========================================
+// 1. 基础环境探针接口 (保持原样，毫秒级任务无需取消机制)
+// ==========================================
+
 #[tauri::command]
 async fn check_ffmpeg_status() -> Result<String, String> {
-    // 尝试调用本地的 ffmpeg 命令
     let output = Command::new("ffmpeg").arg("-version").output();
-
     match output {
         Ok(out) => {
             if out.status.success() {
-                // 提取第一行版本信息并返回给前端
                 let result = String::from_utf8_lossy(&out.stdout);
                 let first_line = result.lines().next().unwrap_or("FFmpeg OK");
                 Ok(format!("FFmpeg 引擎已就绪: {}", first_line))
@@ -42,116 +64,97 @@ async fn check_ffmpeg_status() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn split_video(
-    input_path: String,
-    output_path: String, // 现在前端传过来的可以是基础名称，如 D:\test
-    start_time: String,
-    duration: String,
-) -> Result<String, String> {
-    // 将前端传来的 String 转为 u32，实际开发中这里要加错误处理，暂略
-    let start: u32 = start_time.parse().unwrap_or(0);
-    let dur: u32 = duration.parse().unwrap_or(10);
-
-    // 组装一个单一任务
-    let task = SplitTask {
-        start_time: start,
-        duration: dur,
-        output_path: output_path,
-    };
-
-    // 调用解耦后的底层函数
-    execute_ffmpeg_split(&input_path, &task)
+async fn extract_single_segment(params: workflow_orchestrator::SingleExtractParams) -> Result<String, String> {
+    workflow_orchestrator::extract_single_segment(params).await
 }
-/// 新增：打通闭环的业务接口 —— 按固定时长批量分割视频
+
+// ==========================================
+// 2. Tauri API 网关 (Controller) - 🟢 已接入安全大闸
+// ==========================================
+
+/// 🟢 基础免费功能：按时长切割
 #[tauri::command]
 async fn batch_split_by_duration(
-    input_path: String,
-    // base_output_name: String, // 比如 "D:\Desktop\先导片"，代码会自动加上 _part1.mp4
-    output_dir: String,    //只接收目录路径
-    video_name: String,    //视频基础名称，不带扩展名
-    segment_duration: u32, // 每段时长（秒），比如 30
+    params: workflow_orchestrator::DurationSplitParams,
+    cancel_tx: State<'_, broadcast::Sender<()>> // 注入取消信号发射器
 ) -> Result<String, String> {
-    println!("开始分析视频: {}", input_path);
-
-    // 第一步：获取总时长
-    let total_duration = match get_video_duration(&input_path) {
-        Ok(d) => d,
-        Err(e) => return Err(e),
-    };
-    println!("视频总时长: {} 秒", total_duration);
-
-    // 2. 动态创建专属文件夹: D:\Desktop\jianji\20231024.先导片
-    let target_folder = Path::new(&output_dir).join(&video_name);
-    if !target_folder.exists() {
-        if let Err(e) = fs::create_dir_all(&target_folder) {
-            return Err(format!("创建专属输出目录失败: {}", e));
-        }
-    }
-
-    // 3. 构建任务并指定最终的输出基础路径
-    // base_name 会变成: D:\Desktop\jianji\20231024.先导片\20231024.先导片
-    let base_name = target_folder
-        .join(&video_name)
-        .to_string_lossy()
-        .to_string();
-    let tasks = plan_fixed_duration_splits(total_duration, segment_duration, &base_name);
-
-    // 4. 循环执行切割
-    let mut success_logs = Vec::new();
-    for task in tasks {
-        match execute_ffmpeg_split(&input_path, &task) {
-            Ok(out_path) => success_logs.push(format!("✅ 生成: {}", out_path)),
-            Err(e) => return Err(format!("❌ 切割 {} 失败: {}", task.output_path, e)),
-        }
-    }
-
-    Ok(success_logs.join("\n"))
-}
-/// 辅助函数：获取本软件专属的标记数据存储目录
-fn get_app_marker_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    // 获取标准的 App Local Data 目录
-    let mut data_dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|_| "无法获取系统应用数据目录".to_string())?;
-
-    // 追加子目录: /Markers
-    data_dir.push("Markers");
-    Ok(data_dir)
+    run_with_cancellation(cancel_tx, workflow_orchestrator::run_duration_split(params)).await
 }
 
-// --- 暴露给前端：获取当前工作区路径 ---
+/// 👑 旗舰 PRO 功能：按数量均分 (内含商业鉴权)
+#[tauri::command]
+async fn batch_split_by_count(
+    params: workflow_orchestrator::CountSplitParams,
+    cancel_tx: State<'_, broadcast::Sender<()>>
+) -> Result<String, String> {
+    run_with_cancellation(cancel_tx, workflow_orchestrator::run_count_split(params)).await
+}
+
+/// 🟢/👑 智能打轴片段导出
+#[tauri::command]
+async fn execute_marker_split_task(
+    params: workflow_orchestrator::MarkerSplitParams,
+    cancel_tx: State<'_, broadcast::Sender<()>>
+) -> Result<video_processor::ExportResult, String> {
+    run_with_cancellation(cancel_tx, workflow_orchestrator::run_marker_split(params)).await
+}
+
+/// 👑 旗舰 PRO：执行音频提取
+#[tauri::command]
+async fn execute_audio_extract(
+    params: workflow_orchestrator::AudioExtractParams,
+    cancel_tx: State<'_, broadcast::Sender<()>>
+) -> Result<String, String> {
+    run_with_cancellation(cancel_tx, workflow_orchestrator::run_audio_extract(params)).await
+}
+
+/// 👑 旗舰 PRO：执行格式转换
+#[tauri::command]
+async fn execute_format_convert(
+    params: workflow_orchestrator::FormatConvertParams,
+    cancel_tx: State<'_, broadcast::Sender<()>>
+) -> Result<String, String> {
+    run_with_cancellation(cancel_tx, workflow_orchestrator::run_format_convert(params)).await
+}
+
+// ==========================================
+// 3. 项目与工作区管理 API (保持原样)
+// ==========================================
+
 #[tauri::command]
 fn get_workspace_path() -> String {
-    config_manager::get_workspace_dir()
-        .to_string_lossy()
-        .to_string()
+    config_manager::get_workspace_dir().to_string_lossy().to_string()
 }
-
-// --- 更新保存标记的接口（直接使用 ConfigManager 分配的目录） ---
-
-// --- 更新：V1.1 信封读写 API ---
 
 #[tauri::command]
 async fn save_project(project: EasyCutProject) -> Result<(), String> {
     let storage_dir = config_manager::get_markers_dir();
-    marker_manager::save_project_logic(&storage_dir, &project)
+    marker_manager::save_project_logic(&storage_dir, &project).await
 }
+
 #[tauri::command]
 async fn load_project(video_path: String) -> Result<EasyCutProject, String> {
     let storage_dir = config_manager::get_markers_dir();
-    marker_manager::load_project_logic(&storage_dir, &video_path)
+    marker_manager::load_project_logic(&storage_dir, &video_path).await
 }
-// --- 更新加载标记的接口 ---
 
-// --- 新增 1：获取视频总时长给前端展示 ---
 #[tauri::command]
-async fn get_video_duration_cmd(video_path: String) -> Result<u32, String> {
-    // 复用我们之前写在 video_processor 里的探针函数
-    video_processor::get_video_duration(&video_path)
+async fn move_marker_file_to_trash(video_path: String) -> Result<(), String> {
+    let storage_dir = config_manager::get_markers_dir();
+    let fingerprint = marker_manager::calculate_video_fingerprint(&video_path).await?;
+    let json_path = marker_manager::get_json_path(&storage_dir, &fingerprint);
+    trash_manager::move_to_trash(&json_path).await
 }
 
-// --- 新增 2：打开操作系统的目标文件夹 ---
+// ==========================================
+// 4. 辅助工具与系统交互 API (保持原样)
+// ==========================================
+
+#[tauri::command]
+async fn get_video_duration_cmd(video_path: String) -> Result<f64, String> {
+    video_processor::get_video_duration(&video_path).await
+}
+
 #[tauri::command]
 async fn open_folder(path: String) -> Result<(), String> {
     match open::that(&path) {
@@ -160,102 +163,93 @@ async fn open_folder(path: String) -> Result<(), String> {
     }
 }
 
-// 新增：使用系统默认程序打开单体文件（如直接播放视频）
 #[tauri::command]
 fn open_file(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &path])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    { std::process::Command::new("cmd").args(["/C", "start", "", &path]).spawn().map_err(|e| e.to_string())?; }
     #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    { std::process::Command::new("open").arg(&path).spawn().map_err(|e| e.to_string())?; }
     #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    { std::process::Command::new("xdg-open").arg(&path).spawn().map_err(|e| e.to_string())?; }
     Ok(())
 }
-// --- 新增：读取设置 API ---
+
 #[tauri::command]
 fn get_app_settings() -> AppSettings {
     load_settings()
 }
 
-// --- 新增：保存设置 API ---
 #[tauri::command]
 fn update_app_settings(settings: AppSettings) -> Result<(), String> {
     save_settings_logic(&settings)
 }
-
-
-// --- 修复：增加 async 关键字，移出主线程 ---
+// 🟢 新增：媒体智能探针接口
 #[tauri::command]
-async fn move_marker_file_to_trash(video_path: String) -> Result<(), String> {
-    let storage_dir = config_manager::get_markers_dir();
-    let fingerprint = marker_manager::calculate_video_fingerprint(&video_path)?;
-    let json_path = marker_manager::get_json_path(&storage_dir, &fingerprint);
-    trash_manager::move_to_trash(&json_path)
+async fn probe_media_info_cmd(video_path: String) -> Result<video_processor::MediaInfoDTO, String> {
+    // 毫秒级探测任务，不需要接入 cancel_tx 中断大闸
+    video_processor::probe_media_info(&video_path).await
 }
 
-// --- 修复之前 FFmpeg API 调用的编译报错 ---
+// 🌟 修复：补充自动化脚本 1 的 API 包裹器 (带取消大闸)
 #[tauri::command]
-async fn execute_marker_split_task(video_path: String, output_dir: String) -> Result<video_processor::ExportResult, String> {
-    let storage_dir = config_manager::get_markers_dir();
-
-    // 现在加载的是 Project，我们要提取其中的 markers 传给 FFmpeg
-    let project = marker_manager::load_project_logic(&storage_dir, &video_path)?;
-    if project.markers.is_empty() {
-        return Err("⚠️ 没有任何标记片段！".to_string());
-    }
-
-    tokio::task::spawn_blocking(move || {
-        tauri::async_runtime::block_on(async {
-            video_processor::split_video_by_markers(&video_path, &output_dir, project.markers).await
-        })
-    })
-        .await
-        .map_err(|e| format!("线程池执行异常: {}", e))?
+async fn run_extract_all_audio_cmd(
+    params: workflow_orchestrator::AutoExtractAudioParams,
+    cancel_tx: State<'_, broadcast::Sender<()>>
+) -> Result<String, String> {
+    run_with_cancellation(cancel_tx, workflow_orchestrator::run_extract_all_audio(params)).await
 }
-// ... 记得在 main() 的 invoke_handler 里加上 get_video_duration_cmd 和 open_folder
+
+// 🌟 修复：补充自动化脚本 2 的 API 包裹器 (带取消大闸)
+#[tauri::command]
+async fn run_export_pure_video_cmd(
+    params: workflow_orchestrator::PureVideoParams,
+    cancel_tx: State<'_, broadcast::Sender<()>>
+) -> Result<String, String> {
+    run_with_cancellation(cancel_tx, workflow_orchestrator::run_export_pure_video(params)).await
+}
+// ==========================================
+// 应用主入口
+// ==========================================
 fn main() {
-    // 软件启动时，立刻初始化一次工作区目录，确保文件夹被创建
     let workspace = config_manager::get_workspace_dir();
     println!("易剪启动成功！当前工作区路径: {}", workspace.display());
-    // 2. 读取配置，并触发后台回收站清理守护任务
+
     let settings = load_settings();
     match trash_manager::clean_expired_trash(settings.trash_retention_days) {
         Ok(count) if count > 0 => println!("🧹 启动清理：自动移除了 {} 个过期废弃的标记文件。", count),
         Err(e) => eprintln!("⚠️ 回收站清理异常: {}", e),
-        _ => {} // count == 0 或者不清理，静默通过
+        _ => {}
     }
+
+    // 🟢 初始化全局广播频道 (容量 16 足够防止消息堆积)
+    let (cancel_tx, _) = broadcast::channel::<()>(16);
+
     tauri::Builder::default()
+        .manage(cancel_tx) // 🌟 核心：将大闸的开关注入到 Tauri 全局状态中
         .plugin(tauri_plugin_dialog::init())
-        // 记得把新接口注册进来！
         .invoke_handler(tauri::generate_handler![
             check_ffmpeg_status,
-            split_video,
             batch_split_by_duration,
-            load_project,
-            save_project,
+            batch_split_by_count,
+            execute_marker_split_task,
             get_workspace_path,
+            save_project,
+            load_project,
+            move_marker_file_to_trash,
             get_video_duration_cmd,
             open_folder,
+            open_file,
             get_app_settings,
             update_app_settings,
-            move_marker_file_to_trash,
-            execute_marker_split_task,
-            open_file
+            auth::get_machine_code,
+            auth::verify_license_cmd,
+            extract_single_segment,
+            execute_audio_extract,
+            execute_format_convert,
+            cancel_active_tasks, // 🟢 注册新增的取消接口
+            probe_media_info_cmd, // 👈 在这里注册
+            run_extract_all_audio_cmd,
+            run_export_pure_video_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
