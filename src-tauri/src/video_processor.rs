@@ -41,6 +41,8 @@ pub enum MediaTask {
     ConvertFormat(FormatConvertPayload),
     ExtractSpecificAudio(SpecificAudioPayload),
     ExportPureVideo(PureVideoPayload),
+    // 🌟 新增：处理 6 种语义的多态导出任务
+    ExportMarker(MarkerExportPayload),
 }
 
 #[derive(serde::Serialize)]
@@ -95,6 +97,8 @@ pub struct VideoStreamDTO {
     pub width: u32,
     pub height: u32,
     pub fps: f64,
+    #[serde(default)]
+    pub title: Option<String>, // 🌟 新增：轨道标题
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -102,6 +106,8 @@ pub struct AudioStreamDTO {
     pub index: usize,
     pub codec: String,
     pub language: String,
+    #[serde(default)]
+    pub title: Option<String>, // 🌟 新增：轨道标题
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -109,6 +115,8 @@ pub struct SubtitleStreamDTO {
     pub index: usize,
     pub codec: String,
     pub language: String,
+    #[serde(default)]
+    pub title: Option<String>, // 🌟 新增：轨道标题
 }
 // ==========================================
 // 1. 补充 Payload 定义
@@ -125,6 +133,20 @@ pub struct PureVideoPayload {
     pub input_path: Arc<String>,
     pub output_path: String,
 }
+
+
+// 🌟 1. 在文件顶部的 DTO 区域，增加标记导出的专用载荷
+#[derive(Debug, Clone)]
+pub struct MarkerExportPayload {
+    pub start_time: f64,
+    pub duration: f64,
+    pub input_path: Arc<String>,
+    pub output_path: String,
+    pub export_type: String,       // 指令核心："master", "pure_video", "audio_only" 等
+    pub track_index: Option<usize>, // 针对特定音轨的索引
+}
+
+
 // ==========================================
 // 🌟 核心防线：FFmpeg 路径安全包裹器
 // ==========================================
@@ -229,12 +251,51 @@ pub async fn execute_media_task_async(task: &MediaTask) -> Result<String, String
                 .arg(&safe_out)
                 .output().await.map_err(|e| format!("进程异常: {}", e))?;
             (&p.output_path, out)
+        },
+        // 👇 新增的多态路由分支 👇
+        MediaTask::ExportMarker(p) => {
+            let safe_in = to_ffmpeg_safe_path(&p.input_path);
+            let safe_out = to_ffmpeg_safe_path(&p.output_path);
+
+            cmd.arg("-ss").arg(format!("{:.3}", p.start_time))
+                .arg("-i").arg(&safe_in)
+                .arg("-t").arg(format!("{:.3}", p.duration));
+
+            // 🎯 核心：根据不同语义动态挂载物理层剔除参数
+            match p.export_type.as_str() {
+                "no_subs" => { cmd.args(["-sn", "-c", "copy"]); },
+                "pure_video" => { cmd.args(["-an", "-sn", "-c:v", "copy"]); },
+                "iso_track" => {
+                    let idx = p.track_index.unwrap_or(0);
+                    // 🌟 修复：使用绝对索引 0:{}，精准保留视频和指定的某一条音轨
+                    cmd.args(["-map", "0:v", "-map", &format!("0:{}", idx), "-c", "copy"]);
+                },
+                "audio_only" => {
+                    let idx = p.track_index.unwrap_or(0);
+                    // 🌟 修复：去除 0:a:{} 相对映射，使用绝对索引 0:{}
+                    cmd.args(["-vn", "-map", &format!("0:{}", idx), "-c:a", "copy"]);
+                },
+                "subs_only" => {
+                    let idx = p.track_index.unwrap_or(0);
+                    // 🌟 修复：精确提取特定的字幕轨，而不是提取全部字幕
+                    cmd.args(["-vn", "-an", "-map", &format!("0:{}", idx), "-c:s", "copy"]);
+                },
+                _ => { cmd.args(["-c", "copy"]); } // 默认 master 态
+            }
+
+            cmd.arg("-avoid_negative_ts").arg("1");
+            cmd.arg(&safe_out);
+
+            let out = cmd.output().await.map_err(|e| format!("进程异常: {}", e))?;
+            (&p.output_path, out)
         }
     };
 
     if output.status.success() {
         Ok(format!("✅ 生成: {}", output_path))
     } else {
+        // 🌟 核心修复：如果执行失败，立即把残次品文件删掉，防止下次触发幽灵缓存！
+        let _ = std::fs::remove_file(&output_path);
         let file_name = Path::new(output_path)
             .file_name()
             .unwrap_or_default()
@@ -329,7 +390,7 @@ pub fn plan_fixed_duration_splits(
     tasks
 }
 
-pub fn plan_marker_splits(
+/*pub fn plan_marker_splits(
     input_path: Arc<String>,
     target_dir: &Path,
     video_stem: &str,
@@ -356,7 +417,71 @@ pub fn plan_marker_splits(
     }
     tasks
 }
+*/
+// 🌟 找到 video_processor.rs 中的 plan_marker_splits 函数，替换为以下完整代码：
 
+pub fn plan_marker_splits(
+    input_path: Arc<String>,
+    target_dir: &Path,
+    video_stem: &str,
+    default_ext: &str,
+    markers: Vec<Marker>,
+) -> Vec<MediaTask> {
+    let mut tasks = Vec::new();
+    let active_markers: Vec<Marker> = markers.into_iter().filter(|m| !m.is_deleted).collect();
+
+    for (index, marker) in active_markers.into_iter().enumerate() {
+        let duration = marker.end_time - marker.start_time;
+        if duration <= 0.0 { continue; }
+
+        let safe_label = sanitize_filename(&marker.label);
+
+        let mut export_type = "master".to_string();
+        let mut track_index = None;
+
+        // 🌟 核心修复：完美兼容前端嵌套包 (payload.payload.export_strategy) 与扁平包
+        let strategy_opt = marker.payload.get("export_strategy")
+            .or_else(|| marker.payload.get("payload").and_then(|p| p.get("export_strategy")));
+
+        if let Some(strategy) = strategy_opt {
+            if let Some(t) = strategy.get("type").and_then(|v| v.as_str()) {
+                export_type = t.to_string();
+            }
+            if let Some(idx) = strategy.get("target_audio_stream").and_then(|v| v.as_u64()) {
+                track_index = Some(idx as usize);
+            }
+        }
+
+        // 📂 智能路由：根据读取到的精准语义，分配子文件夹与物理后缀名
+        let (sub_dir_name, ext) = match export_type.as_str() {
+            "master" => ("01_Master_Clips", default_ext),
+            "no_subs" => ("02_Clean_Feed", default_ext),
+            "pure_video" => ("03_B_Roll", default_ext),
+            "iso_track" => ("04_Iso_Tracks", default_ext),
+            "audio_only" => ("05_Audio", "m4a"), // 🎧 纯物理音频必然是 m4a
+            "subs_only" => ("06_Subtitles", "srt"), // 📝 纯字幕提取
+            _ => ("00_Uncategorized", default_ext),
+        };
+
+        // 自动创建对应的分类子目录
+        let sub_dir = target_dir.join(sub_dir_name);
+        let _ = std::fs::create_dir_all(&sub_dir);
+
+        // 组装最终的安全文件名与路径
+        let out_file_name = format!("[{:02}]_{}_{}.{}", index + 1, video_stem, safe_label, ext);
+        let out_file_path = sub_dir.join(&out_file_name);
+
+        tasks.push(MediaTask::ExportMarker(MarkerExportPayload {
+            start_time: marker.start_time,
+            duration,
+            input_path: Arc::clone(&input_path),
+            output_path: out_file_path.to_string_lossy().to_string(),
+            export_type,
+            track_index,
+        }));
+    }
+    tasks
+}
 fn sanitize_filename(name: &str) -> String {
     name.replace(&['\\', '/', ':', '*', '?', '"', '<', '>', '|'][..], "_")
 }
@@ -420,7 +545,17 @@ pub async fn probe_media_info(input_path: &str) -> Result<MediaInfoDTO, String> 
     for stream in probe_data.streams {
         let codec = stream.codec_name.unwrap_or_else(|| "unknown".to_string());
         let tags = stream.tags.unwrap_or_default();
-        let lang = tags.get("language").cloned().unwrap_or_else(|| "und".to_string()); // und = undefined
+
+        // 抓取语言标签（兼容大小写）
+        let lang = tags.get("language")
+            .or_else(|| tags.get("LANGUAGE"))
+            .cloned()
+            .unwrap_or_else(|| "und".to_string()); // und = undefined
+
+        // 🌟 核心升级：抓取轨道标题标签（兼容大小写）
+        let title = tags.get("title")
+            .or_else(|| tags.get("TITLE"))
+            .cloned();
 
         match stream.codec_type.as_str() {
             "video" => {
@@ -443,16 +578,27 @@ pub async fn probe_media_info(input_path: &str) -> Result<MediaInfoDTO, String> 
                         width: stream.width.unwrap_or(0),
                         height: stream.height.unwrap_or(0),
                         fps,
+                        title, // 👈 将标题注入 DTO
                     });
                 }
             },
             "audio" => {
-                audio_streams.push(AudioStreamDTO { index: stream.index, codec, language: lang });
+                audio_streams.push(AudioStreamDTO {
+                    index: stream.index,
+                    codec,
+                    language: lang,
+                    title  // 👈 将标题注入 DTO
+                });
             },
             "subtitle" => {
-                subtitle_streams.push(SubtitleStreamDTO { index: stream.index, codec, language: lang });
+                subtitle_streams.push(SubtitleStreamDTO {
+                    index: stream.index,
+                    codec,
+                    language: lang,
+                    title  // 👈 将标题注入 DTO
+                });
             },
-            _ => {} // 忽略 attachment 或 data 数据流
+            _ => {} // 忽略 attachment 或 data 等无用数据流
         }
     }
 

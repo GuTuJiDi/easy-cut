@@ -60,7 +60,27 @@
                   </div>
                 </div>
               </div>
+              <div class="strategy-group">
+                <div class="type-radio-grid">
+                  <label
+                      v-for="t in MARKER_TYPES"
+                      :key="t.id"
+                      class="type-radio-label"
+                      :class="{ active: draftExportType === t.id }"
+                  >
+                    <input type="radio" :value="t.id" v-model="draftExportType" class="hidden-radio" />
+                    <span class="radio-icon">{{ t.icon }}</span>
+                    <span class="radio-name">{{ t.name }}</span>
+                  </label>
+                </div>
 
+                <transition name="fade-fast">
+                  <div class="sub-options" v-if="['iso_track', 'audio_only'].includes(draftExportType)">
+                    <span>🎧 目标音轨索引:</span>
+                    <input type="number" v-model.number="draftAudioTrack" min="0" max="10" class="track-input" />
+                  </div>
+                </transition>
+              </div>
               <div class="modal-input-group">
                 <input ref="draftInputRef" v-model="draftLabel" type="text" placeholder="输入片段描述 (回车确认, ESC收起)" @keyup.enter="saveMarker" @keyup.esc="onInputEsc" />
                 <button class="confirm-btn" :class="{'is-editing': selectedMarkerId}" @click="saveMarker" :disabled="!draftLabel.trim()">
@@ -101,23 +121,56 @@
                   v-for="(m, index) in activeMarkers"
                   :key="m.id"
                   class="marker-item"
-                  :class="{ 'is-selected': selectedMarkerId === m.id }"
+                  :class="{ 'is-focused': focusedMarkerId === m.id, 'is-editing': selectedMarkerId === m.id }"
                   :style="{ borderLeftColor: getMarkerColor(index) }"
-                  @click="selectMarker(m)"
+                  @click="focusMarker(m)"
               >
-                <div class="marker-info">
-                  <div class="marker-header">
+                <div class="marker-content-wrapper">
+
+                  <div class="marker-top-row">
                     <span class="marker-index" :style="{ backgroundColor: getMarkerColor(index), color: '#fff' }">#{{ index + 1 }}</span>
-                    <span class="marker-label" :title="m.label">{{ m.label }}</span>
+
+                    <div class="custom-type-selector" @click.stop="toggleDropdown(m.id)">
+                      <span class="type-icon">{{ getMarkerIcon(m) }}</span>
+                      <span class="type-name">{{ getMarkerTypeName(m) }}</span>
+                      <span class="dropdown-arrow">▼</span>
+
+                      <transition name="fade-fast">
+                        <div class="custom-dropdown-menu" v-if="openDropdownId === m.id">
+                          <div class="dropdown-opt"
+                               v-for="t in MARKER_TYPES" :key="t.id"
+                               :class="{'active': (m.payload?.export_strategy?.type || 'master') === t.id}"
+                               @click.stop="updateMarkerType(m, t.id); openDropdownId = null">
+                            <span class="opt-icon">{{ t.icon }}</span> {{ t.name }}
+                          </div>
+                        </div>
+                      </transition>
+                    </div>
+
+                    <span class="marker-time">{{ formatTime(m.startTime) }} ➔ {{ formatTime(m.endTime) }}</span>
                   </div>
-                  <span class="marker-time">{{ formatTime(m.startTime) }} ➔ {{ formatTime(m.endTime) }}</span>
+
+                  <div class="marker-desc-row">
+                    <div class="marker-label" :class="{'is-expanded': focusedMarkerId === m.id}">
+                      {{ m.label }}
+                    </div>
+                  </div>
+
                 </div>
-                <div class="marker-actions">
-                  <button class="icon-btn play-btn" @click.stop="playSegment(m)" title="从入点强制播放">▶</button>
-                  <button class="icon-btn split-btn" @click.stop="handleSubTask(m, '/split')" title="抽出此片段并去分割">✂️</button>
-                  <button class="icon-btn marker-btn" @click.stop="handleSubTask(m, '/marker')" title="抽出此片段并去打轴">🏷️</button>
-                  <button class="icon-btn delete-btn" @click.stop="removeMarker(m.id)" title="删除">✖</button>
-                </div>
+
+                <transition name="expand">
+                  <div class="marker-action-bar" v-show="focusedMarkerId === m.id">
+                    <button class="bar-btn primary-tint" @click.stop="editMarker(m)" title="修改时间段或描述">✏️ 编辑</button>
+                    <button class="bar-btn success-tint" @click.stop="playSegment(m)" title="系统预览">▶ 播放</button>
+
+                    <div class="bar-spacer"></div>
+
+                    <button class="bar-btn icon-only" @click.stop="handleSubTask(m, '/split')" title="抽出此片段并去分割">✂️</button>
+                    <button class="bar-btn icon-only" @click.stop="handleSubTask(m, '/marker')" title="抽出此片段并去打轴">🏷️</button>
+                    <button class="bar-btn icon-only danger-tint" @click.stop="removeMarker(m.id)" title="删除片段">🗑️</button>
+                  </div>
+                </transition>
+
               </li>
             </transition-group>
           </ul>
@@ -225,7 +278,15 @@ import EasyCutPlayer from './EasyCutPlayer.vue';
 import ExportResultModal from './ExportResultModal.vue';
 import { useSettingsStore } from '../stores/settings';
 
-interface Marker { id: string; startTime: number; endTime: number; label: string; is_deleted: boolean; }
+// 🌟 1. 找到并修改 Marker 接口，追加 payload 以承载我们的导出策略
+interface Marker {
+  id: string;
+  startTime: number;
+  endTime: number;
+  label: string;
+  is_deleted: boolean;
+  payload?: any; // 👈 新增：安全承载底层信封数据
+}
 interface ProjectMeta { project_id: string; project_name: string; created_at: number; linked_file_hash: string | null; linked_file_name: string | null; source_type: string; [key: string]: any; }
 interface EasyCutProject { version: string; meta: ProjectMeta; markers: Marker[]; }
 
@@ -249,8 +310,39 @@ const draftLabel = ref('');
 const draftInputRef = ref<HTMLInputElement | null>(null);
 
 const selectedMarkerId = ref<string | null>(null);
-const markers = ref<Marker[]>([]);
+const focusedMarkerId = ref<string | null>(null);  // 鼠标点击选中的焦点片段（用于预览/展开）
+const openDropdownId = ref<string | null>(null); // 控制自定义下拉菜单的展开
+// 获取类型的中文名称
+const getMarkerTypeName = (marker: Marker) => {
+  const typeId = marker.payload?.export_strategy?.type || 'master';
+  return MARKER_TYPES.find(t => t.id === typeId)?.name || '源质混采';
+};
+// 切换下拉菜单 (阻止事件冒泡以防触发外层 focus)
+function toggleDropdown(id: string) {
+  openDropdownId.value = openDropdownId.value === id ? null : id;
+}
+// 全局点击关闭下拉菜单
+function closeDropdowns() {
+  openDropdownId.value = null;
+}
 
+const markers = ref<Marker[]>([]);
+// 🌟 2. 在 setup 内部的顶层区域，新增 6 大语义字典和响应式状态
+const MARKER_TYPES = [
+  { id: 'master', icon: '🎬', name: '源质混采' },
+  { id: 'no_subs', icon: '🎞️', name: '剔除字幕' },
+  { id: 'pure_video', icon: '🔇', name: '纯净画面' },
+  { id: 'iso_track', icon: '🎙️', name: '单音轨' },
+  { id: 'audio_only', icon: '🎧', name: '纯声音效' },
+  { id: 'subs_only', icon: '📝', name: '纯软字幕' }
+];
+const draftExportType = ref('master');
+const draftAudioTrack = ref(0);
+// 安全获取图标 (用于列表展示)
+const getMarkerIcon = (marker: Marker) => {
+  const typeId = marker.payload?.export_strategy?.type || 'master';
+  return MARKER_TYPES.find(t => t.id === typeId)?.icon || '🎬';
+};
 // ==========================================
 // 🌟 核心升级：线性游标撤销重做架构 (Undo / Redo Timeline)
 // ==========================================
@@ -431,11 +523,20 @@ watch(currentVideoTime, () => {
   }
 });
 
+// 🌟 3. 替换 resetDraft，增加清空草稿类型
+/*function resetDraft() {
+  draftIn.value = null; draftOut.value = null; draftLabel.value = '';
+  draftExportType.value = 'master'; draftAudioTrack.value = 0; // 👈 新增恢复默认态
+  selectedMarkerId.value = null; showDraftModal.value = false;
+}*/
+// 替换原来的 resetDraft，同时清除聚焦和编辑状态
 function resetDraft() {
   draftIn.value = null; draftOut.value = null; draftLabel.value = '';
-  selectedMarkerId.value = null; showDraftModal.value = false;
+  draftExportType.value = 'master'; draftAudioTrack.value = 0;
+  selectedMarkerId.value = null;
+  focusedMarkerId.value = null; // 失去焦点
+  showDraftModal.value = false;
 }
-
 async function loadVideoProject(targetPath: string) {
   videoPath.value = targetPath; videoSrc.value = convertFileSrc(targetPath);
   resetDraft(); unsavedChanges.value = false; markers.value = [];
@@ -462,11 +563,16 @@ function closeProject() {
   videoPath.value = ''; videoSrc.value = ''; markers.value = []; currentProjectMeta.value = null; resetDraft(); initHistory();
 }
 
+// 🌟 4. 替换 selectMarker，点击编辑时回显保存的类型
 function selectMarker(m: Marker) {
   selectedMarkerId.value = m.id;
   draftIn.value = m.startTime;
   draftOut.value = m.endTime;
   draftLabel.value = m.label;
+  // 👇 新增回显逻辑
+  draftExportType.value = m.payload?.export_strategy?.type || 'master';
+  draftAudioTrack.value = m.payload?.export_strategy?.target_audio_stream || 0;
+
   showDraftModal.value = false;
   playerRef.value?.seekTo(m.startTime);
 }
@@ -486,7 +592,7 @@ async function handleSubTask(m: Marker, targetRoute: string) {
   showSubTaskModal.value = true;
 }
 
-async function executeSubTask() {
+/*async function executeSubTask() {
   if (!pendingSubTaskMarker.value || !videoPath.value) return;
 
   isExtracting.value = true;
@@ -518,6 +624,72 @@ async function executeSubTask() {
         expected_batch_path: expectedBatchPath,
         fallback_output_dir: inputDir,
         fallback_file_name: fallbackFileName
+      }
+    });
+
+    showSubTaskModal.value = false;
+    router.push({ path: pendingSubTaskRoute.value, query: { loadVideo: outPath } });
+
+  } catch (err) {
+    console.error(err);
+    alert(`🚨 提取失败！\n详细错误: ${err}`);
+  } finally {
+    isExtracting.value = false;
+  }
+}*/
+async function executeSubTask() {
+  if (!pendingSubTaskMarker.value || !videoPath.value) return;
+
+  isExtracting.value = true;
+  playerRef.value?.triggerOSD("🚀 智能探针启动...");
+
+  try {
+    const m = pendingSubTaskMarker.value;
+    const videoStem = videoFileName.value.substring(0, videoFileName.value.lastIndexOf('.'));
+    const defaultExt = videoFileName.value.split('.').pop() || 'mp4';
+
+    // 🌟 1. 核心修复：读取该片段的真实导出策略
+    const exportType = m.payload?.export_strategy?.type || 'master';
+    let subDirName = "00_Uncategorized";
+    let actualExt = defaultExt;
+
+    // 🌟 2. 核心修复：与 Rust 后端保持绝对一致的文件夹和后缀映射规则
+    switch (exportType) {
+      case 'master': subDirName = "01_Master_Clips"; break;
+      case 'no_subs': subDirName = "02_Clean_Feed"; break;
+      case 'pure_video': subDirName = "03_B_Roll"; break;
+      case 'iso_track': subDirName = "04_Iso_Tracks"; break;
+      case 'audio_only': subDirName = "05_Audio"; actualExt = "m4a"; break;
+      case 'subs_only': subDirName = "06_Subtitles"; actualExt = "srt"; break;
+      default: subDirName = "01_Master_Clips"; break;
+    }
+
+    const safeLabel = m.label.replace(/[\\/:*?"<>|]/g, "_") || `片段_${m.id}`;
+    const index = activeMarkers.value.findIndex(marker => marker.id === m.id);
+
+    // 🌟 3. 组装正确的文件名（应用正确的后缀，如 .m4a）
+    const expectedBatchFileName = `[${String(index + 1).padStart(2, '0')}]_${videoStem}_${safeLabel}.${actualExt}`;
+
+    let expectedBatchPath = null;
+    if (finalExportDir.value) {
+      const separator = finalExportDir.value.includes('\\') ? '\\' : '/';
+      // 🌟 4. 组装正确的绝对路径（拼接上智能子文件夹）
+      expectedBatchPath = `${finalExportDir.value}${separator}${subDirName}${separator}${expectedBatchFileName}`;
+    }
+
+    const inputDir = videoPath.value.substring(0, videoPath.value.lastIndexOf('\\') > -1 ? videoPath.value.lastIndexOf('\\') : videoPath.value.lastIndexOf('/'));
+    const fallbackFileName = `${videoStem}_独立提取_${safeLabel}.${actualExt}`;
+
+    const outPath = await invoke<string>('extract_single_segment', {
+      params: {
+        video_path: videoPath.value,
+        start_time: m.startTime,
+        end_time: m.endTime,
+        expected_batch_path: expectedBatchPath,
+        fallback_output_dir: inputDir,
+        fallback_file_name: fallbackFileName,
+        export_type: exportType, // 👈 传给后端的策略类型
+        track_index: m.payload?.export_strategy?.target_audio_stream || null // 👈 传给后端的音轨索引
       }
     });
 
@@ -570,23 +742,36 @@ function cancelDraft() {
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
 }
 
+// 🌟 5. 替换 saveMarker，保存时封装 payload
 function saveMarker() {
   if (draftIn.value !== null && draftOut.value !== null) {
     const safeLabel = draftLabel.value.trim() || `片段_${Math.floor(Math.random()*1000)}`;
+    const strategyPayload = { type: draftExportType.value, target_audio_stream: draftAudioTrack.value }; // 👈 策略封装
 
     if (selectedMarkerId.value) {
       const target = markers.value.find(m => m.id === selectedMarkerId.value);
       if (target) {
-        target.startTime = draftIn.value; target.endTime = draftOut.value; target.label = safeLabel; target.is_deleted = false;
+        target.startTime = draftIn.value; target.endTime = draftOut.value;
+        target.label = safeLabel; target.is_deleted = false;
+        // 👇 安全更新 payload
+        if (!target.payload) target.payload = {};
+        target.payload.export_strategy = strategyPayload;
       }
       playerRef.value?.triggerOSD("✅ 修改已保存");
     } else {
-      markers.value.push({ id: Date.now().toString(), startTime: draftIn.value, endTime: draftOut.value, label: safeLabel, is_deleted: false });
+      markers.value.push({
+        id: Date.now().toString(),
+        startTime: draftIn.value,
+        endTime: draftOut.value,
+        label: safeLabel,
+        is_deleted: false,
+        payload: { export_strategy: strategyPayload } // 👈 首次保存时注入 payload
+      });
       playerRef.value?.triggerOSD("✅ 已添加");
     }
 
     markers.value.sort((a, b) => a.startTime - b.startTime);
-    commitHistory(); // 🌟 保存修改后，提交历史快照入栈
+    commitHistory();
     resetDraft();
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   }
@@ -723,11 +908,15 @@ watch(() => route.query.loadVideo, (newPath) => {
   }
 }, { immediate: true });
 
-onMounted(() => { isMounted.value = true; window.addEventListener('keydown', handleKeyDown); });
+onMounted(() => {
+  isMounted.value = true;
+  window.addEventListener('keydown', handleKeyDown);
+  document.addEventListener('click', closeDropdowns); // 👈 新增
+});
 // 修改 ManualMarker.vue 的 onUnmounted：
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
-
+  document.removeEventListener('click', closeDropdowns); // 👈 新增
   // 🌟 扫雷：清理幽灵定时器
   if (toastTimer) clearTimeout(toastTimer);
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
@@ -736,6 +925,35 @@ onUnmounted(() => {
   document.removeEventListener('mousemove', onDragModal);
   document.removeEventListener('mouseup', stopDragModal);
 });
+
+// 列表内直接修改类型的函数 (带历史快照提交)
+function updateMarkerType(marker: Marker, newType: string) {
+  if (!marker.payload) marker.payload = {};
+  if (!marker.payload.export_strategy) {
+    marker.payload.export_strategy = { type: 'master', target_audio_stream: 0 };
+  }
+  marker.payload.export_strategy.type = newType;
+  commitHistory(); // 🌟 修改后自动存入撤销/重做快照
+}
+// (修复问题 3) 聚焦片段：只跳转进度条并展开 UI，绝不强制覆盖底部草稿箱
+function focusMarker(m: Marker) {
+  focusedMarkerId.value = m.id;
+  playerRef.value?.seekTo(m.startTime);
+}
+// 独立的主动编辑函数：只有点击 ✏️ 编辑按钮时，才将数据载入底部草稿箱
+function editMarker(m: Marker) {
+  selectedMarkerId.value = m.id;
+  focusedMarkerId.value = m.id; // 保持高亮
+  draftIn.value = m.startTime;
+  draftOut.value = m.endTime;
+  draftLabel.value = m.label;
+
+  draftExportType.value = m.payload?.export_strategy?.type || 'master';
+  draftAudioTrack.value = m.payload?.export_strategy?.target_audio_stream || 0;
+
+  showDraftModal.value = false; // 如果有弹窗则收起，统一在底部编辑
+  playerRef.value?.triggerOSD("✏️ 进入编辑模式");
+}
 </script>
 
 <style scoped>
@@ -919,4 +1137,120 @@ onUnmounted(() => {
 .modal-fade-enter-active, .modal-fade-leave-active { transition: opacity 0.25s ease; }
 .modal-fade-enter-from, .modal-fade-leave-to { opacity: 0; }
 .modal-fade-enter-active .subtask-modal-content { animation: modalPopIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+
+/* ================= 新增：多阶语义样式 ================= */
+.semantic-selector {
+  display: flex; align-items: center; position: relative;
+  background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px;
+  padding: 1px 6px; transition: 0.2s; cursor: pointer;
+}
+.semantic-selector:hover { background: #e2e8f0; border-color: #94a3b8; }
+.type-icon { font-size: 0.95rem; margin-right: 4px; pointer-events: none; }
+.type-dropdown {
+  appearance: none; -webkit-appearance: none;
+  background: transparent; border: none; outline: none;
+  font-size: 0.75rem; font-weight: 600; color: #475569;
+  cursor: pointer; padding-right: 12px;
+}
+.semantic-selector::after {
+  content: '▼'; position: absolute; right: 4px; top: 50%;
+  transform: translateY(-50%) scale(0.6); color: #94a3b8; pointer-events: none;
+}
+
+.strategy-group { margin-bottom: 12px; width: 100%; }
+.type-radio-grid {
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;
+}
+.hidden-radio { display: none; }
+.type-radio-label {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 8px 4px; background: rgba(30,41,59,0.8); border: 1px solid #475569; border-radius: 8px;
+  cursor: pointer; transition: all 0.2s ease;
+}
+.type-radio-label:hover { background: rgba(51,65,85,0.8); }
+.type-radio-label.active {
+  background: rgba(56,189,248,0.2); border-color: #38bdf8;
+}
+.type-radio-label.active .radio-name { color: #bae6fd; font-weight: bold; }
+.radio-icon { font-size: 1.2rem; margin-bottom: 2px; }
+.radio-name { font-size: 0.7rem; color: #cbd5e1; white-space: nowrap; }
+
+.sub-options {
+  margin-top: 8px; padding: 6px 10px; background: rgba(56,189,248,0.1); border: 1px dashed #38bdf8;
+  border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 0.8rem; color: #bae6fd;
+}
+.track-input { width: 40px; text-align: center; border: 1px solid #38bdf8; border-radius: 4px; outline: none; background: #0f172a; color: white;}
+/* ================= 🌟 列表焦点展开式架构 ================= */
+.marker-item {
+  display: flex; flex-direction: column; padding: 0.6rem 0.85rem;
+  background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px;
+  border-left-width: 4px; cursor: pointer; transition: all 0.2s ease;
+  position: relative; overflow: visible; /* 允许下拉菜单溢出 */
+}
+.marker-item:hover { background: #f8fafc; border-color: #cbd5e1; }
+.marker-item.is-focused { background: #f8fafc; border-color: #94a3b8; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+.marker-item.is-editing { background: #eff6ff; border-color: #3b82f6; box-shadow: 0 4px 12px rgba(59,130,246,0.15); }
+
+.marker-content-wrapper { display: flex; flex-direction: column; gap: 6px; }
+
+/* 顶部信息行 */
+.marker-top-row { display: flex; align-items: center; gap: 8px; }
+.marker-index { color: white; font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; font-weight: bold; flex-shrink: 0;}
+.marker-time { margin-left: auto; font-family: monospace; font-size: 0.8rem; color: #6b7280; flex-shrink: 0;}
+
+/* 🌟 修复红框 1：描述文本自动截断与展开 */
+.marker-desc-row { padding-left: 2px; }
+.marker-label {
+  font-weight: 600; color: #334155; font-size: 0.85rem; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+  transition: color 0.2s; word-break: break-all;
+}
+.marker-label.is-expanded { -webkit-line-clamp: unset; color: #0f172a; } /* 聚焦时展示全部文本 */
+
+/* 🌟 修复红框 2：自绘高级下拉徽章 */
+.custom-type-selector {
+  display: inline-flex; align-items: center; gap: 4px; position: relative;
+  background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px;
+  padding: 3px 8px; cursor: pointer; transition: 0.2s;
+}
+.custom-type-selector:hover { background: #e2e8f0; border-color: #94a3b8; }
+.type-icon { font-size: 0.85rem; }
+.type-name { font-size: 0.75rem; font-weight: 600; color: #475569; }
+.dropdown-arrow { font-size: 0.6rem; color: #94a3b8; transform: scaleY(0.8); }
+
+.custom-dropdown-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; width: max-content; min-width: 120px;
+  background: white; border: 1px solid #e2e8f0; border-radius: 8px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); z-index: 50;
+  padding: 4px; display: flex; flex-direction: column; gap: 2px;
+}
+.dropdown-opt {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  font-size: 0.8rem; font-weight: 600; color: #475569; border-radius: 6px; transition: 0.2s;
+}
+.dropdown-opt:hover { background: #f8fafc; color: #1e293b; }
+.dropdown-opt.active { background: #eff6ff; color: #2563eb; }
+.opt-icon { font-size: 1rem; }
+
+/* 🌟 修复红框 3：焦点展开式操作栏 */
+.marker-action-bar {
+  display: flex; align-items: center; gap: 6px; margin-top: 10px;
+  padding-top: 10px; border-top: 1px dashed #e2e8f0;
+}
+.bar-spacer { flex: 1; }
+.bar-btn {
+  background: white; border: 1px solid #cbd5e1; color: #475569;
+  padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 600;
+  cursor: pointer; transition: 0.2s; display: flex; align-items: center; gap: 4px;
+}
+.bar-btn:hover { background: #f8fafc; border-color: #94a3b8; color: #1e293b; }
+.bar-btn.icon-only { padding: 4px 6px; font-size: 0.85rem; }
+
+.bar-btn.primary-tint:hover { background: #eff6ff; border-color: #bfdbfe; color: #2563eb; }
+.bar-btn.success-tint:hover { background: #ecfdf5; border-color: #a7f3d0; color: #10b981; }
+.bar-btn.danger-tint:hover { background: #fef2f2; border-color: #fecaca; color: #ef4444; }
+
+/* 展开动画 */
+.expand-enter-active, .expand-leave-active { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); max-height: 50px; opacity: 1; overflow: hidden; }
+.expand-enter-from, .expand-leave-to { max-height: 0; opacity: 0; padding-top: 0; margin-top: 0; border-top-color: transparent; }
 </style>
