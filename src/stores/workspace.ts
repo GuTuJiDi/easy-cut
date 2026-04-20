@@ -1,13 +1,9 @@
-// src/stores/workspace.ts
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 
 export const useWorkspaceStore = defineStore('workspace', () => {
     const currentWorkspace = ref<string>('');
-
-    // 商业化预埋：软件的授权状态 (free / pro)
-    const isProVersion = ref<boolean>(false);
 
     // 初始化时从后端获取真实的工作区路径
     async function initWorkspace() {
@@ -18,5 +14,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         }
     }
 
-    return { currentWorkspace, isProVersion, initWorkspace };
+    return { currentWorkspace, initWorkspace };
 });

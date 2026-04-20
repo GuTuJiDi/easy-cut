@@ -59,5 +59,15 @@ export const appModules: AppModule[] = [
         path: '/settings',
         component: () => import('../views/SettingsView.vue'), // 占位
         group: 'settings'
-    }
+    },
+    {
+        id: 'check-format',
+        name: '视频轨道检查',
+        icon: '👆',
+        path: '/check-format',
+        component: () => import('../components/MediaInspector.vue'),
+        isPro: true,
+        group: 'main'
+    },
+
 ];

@@ -29,3 +29,12 @@ tauri-plugin-dialog = "2"
 sha2 = "0.10"  # <--- 新增：用于生成极速视频指纹
 dirs = "5" # <--- 新增：用于精准获取操作系统的Documents/Home目录
 open = "5"
+# 🌟 新增：用于获取底层硬件机器码的权威库
+machine-uid = "0.3.0"
+# 🌟 新增：RSA 非对称加密与哈希算法
+rsa = {version = "0.9.3" ,features = ["sha2", "pem"] }
+# 🌟 新增：用于编解码激活串
+base64 = "0.21.5"
+
+# 🌟 新增：强大的异步生态与流式并发控制
+futures = "0.3.28"

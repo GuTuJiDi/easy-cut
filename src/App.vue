@@ -18,7 +18,7 @@
         <router-link v-for="mod in mainModules" :key="mod.id" :to="mod.disabled ? '' : mod.path" class="nav-item" :class="{ 'is-disabled': mod.disabled }" :title="isCollapsed ? mod.name : ''">
           <span class="icon">{{ mod.icon }}</span>
           <span class="mod-name" v-show="!isCollapsed">{{ mod.name }}</span>
-          <span v-if="mod.isPro && !workspaceStore.isProVersion && !isCollapsed" class="pro-badge">PRO</span>
+          <span v-if="mod.isPro && !authStore.isPro && !isCollapsed" class="pro-badge">PRO</span>
         </router-link>
       </nav>
 
@@ -45,15 +45,16 @@ import { computed, onMounted, ref } from 'vue';
 import { useWorkspaceStore } from './stores/workspace';
 import { useSettingsStore } from './stores/settings';
 import { appModules } from './config/modules';
-
+import { useAuthStore } from './stores/auth'; // 🌟 1. 引入真实的授权仓库
 const workspaceStore = useWorkspaceStore();
 const settingsStore = useSettingsStore();
 const isCollapsed = ref(false); // 控制侧边栏折叠状态
+const authStore = useAuthStore(); // 🌟 2. 实例化授权仓库
 
 const mainModules = computed(() => appModules.filter(m => m.group === 'main'));
 const settingsModules = computed(() => appModules.filter(m => m.group === 'settings'));
-
 onMounted(() => {
+  authStore.silentVerify(); // 🌟 移到这里，最安全稳妥
   workspaceStore.initWorkspace();
   settingsStore.fetchSettings(); // 启动时全局拉取设置
 });

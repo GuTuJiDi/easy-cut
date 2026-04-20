@@ -1,5 +1,4 @@
 <template>
-  <!-- 播放器外壳：也是全屏触发的容器 -->
   <div class="player-card card" ref="playerContainerRef" @mousemove="resetHideTimer" @mouseleave="handleMouseLeave">
 
     <div class="video-wrapper" :class="{ 'hide-cursor': !showControls && isPlaying }" @click="togglePlay">
@@ -23,9 +22,8 @@
       </div>
     </div>
 
-    <!-- 🌟 核心：为父组件预留的插槽，保证父组件的打轴输入框在全屏时也能显示 -->
     <slot></slot>
-    <!-- 🌟 恢复：全屏状态下的右侧标记列表 (Drawer) -->
+
     <transition name="slide-right">
       <div class="fullscreen-drawer" v-show="isFullscreen && showDrawer" @click.stop>
         <div class="drawer-header">
@@ -40,7 +38,7 @@
         </ul>
       </div>
     </transition>
-    <!-- 悬浮控制条 -->
+
     <transition name="fade-controls">
       <div class="video-controls-overlay" v-show="showControls || !isPlaying" @click.stop>
 
@@ -48,7 +46,6 @@
           <div class="progress-track" ref="trackRef">
             <div class="progress-bg"></div>
 
-            <!-- 彩色章节块 -->
             <div v-for="(m, index) in markers" :key="'track-'+m.id">
               <div class="chapter-segment"
                    :style="{ left: `${(m.startTime / duration) * 100}%`, width: `${((m.endTime - m.startTime) / duration) * 100}%`, backgroundColor: getMarkerColor(index) }"
@@ -112,11 +109,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
 
-// ==========================================
-// 1. 类型约束与 Props/Emits
-// ==========================================
 interface Marker { id: string; startTime: number; endTime: number; label: string; }
 
 const props = defineProps<{
@@ -132,9 +126,6 @@ const emit = defineEmits<{
   (e: 'fullscreenchange', isFullscreen: boolean): void;
 }>();
 
-// ==========================================
-// 2. 内部状态
-// ==========================================
 const videoRef = ref<HTMLVideoElement | null>(null);
 const playerContainerRef = ref<HTMLDivElement | null>(null);
 const trackRef = ref<HTMLDivElement | null>(null);
@@ -156,17 +147,12 @@ let hideControlsTimer: number | null = null;
 let osdTimer: number | null = null;
 let isDragging = false;
 
-const showDrawer = ref(false); // 控制全屏列表开关
+const showDrawer = ref(false);
 function toggleDrawer() {
-  if (isFullscreen.value) {
-    showDrawer.value = !showDrawer.value;
-  } else {
-    triggerOSD("⚠️ 请先进入全屏模式 (F)");
-  }
+  if (isFullscreen.value) { showDrawer.value = !showDrawer.value; }
+  else { triggerOSD("⚠️ 请先进入全屏模式 (F)"); }
 }
-// ==========================================
-// 3. 核心工具函数
-// ==========================================
+
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds === null) return '00:00.00';
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -176,9 +162,7 @@ function formatTime(seconds: number): string {
 }
 
 const colorPalette = ['#34d399', '#60a5fa', '#f472b6', '#fbbf24', '#c084fc', '#f87171', '#2dd4bf', '#818cf8'];
-function getMarkerColor(index: number) {
-  return colorPalette[index % colorPalette.length];
-}
+function getMarkerColor(index: number) { return colorPalette[index % colorPalette.length]; }
 
 function triggerOSD(msg: string) {
   osdText.value = msg; osdVisible.value = true;
@@ -186,9 +170,6 @@ function triggerOSD(msg: string) {
   osdTimer = window.setTimeout(() => { osdVisible.value = false; }, 1500);
 }
 
-// ==========================================
-// 4. 视频核心逻辑
-// ==========================================
 function handleLoadedMetadata() {
   if (videoRef.value) {
     duration.value = videoRef.value.duration;
@@ -199,7 +180,7 @@ function handleLoadedMetadata() {
 function handleInternalTimeUpdate() {
   if (videoRef.value && !isDragging) {
     internalCurrentTime.value = videoRef.value.currentTime;
-    emit('timeupdate', internalCurrentTime.value); // 同步给父组件打轴用
+    emit('timeupdate', internalCurrentTime.value);
   }
 }
 
@@ -207,6 +188,23 @@ function togglePlay() {
   if (!videoRef.value) return;
   if (videoRef.value.paused) { videoRef.value.play(); resetHideTimer(); triggerOSD("▶ 播放"); }
   else { videoRef.value.pause(); showControls.value = true; triggerOSD("⏸ 暂停"); }
+}
+
+// 🌟 核心修复 1：专门暴露一个 play 函数供外部强制播放
+function play() {
+  if (videoRef.value && videoRef.value.paused) {
+    videoRef.value.play();
+    resetHideTimer();
+    triggerOSD("▶ 播放");
+  }
+}
+
+function pause() {
+  if (videoRef.value && !videoRef.value.paused) {
+    videoRef.value.pause();
+    showControls.value = true;
+    triggerOSD("⏸ 暂停");
+  }
 }
 
 function seekTo(time: number) {
@@ -218,6 +216,13 @@ function seekTo(time: number) {
   }
 }
 
+function seekOffset(offset: number) {
+  if (videoRef.value) {
+    const newTime = videoRef.value.currentTime + offset;
+    seekTo(newTime);
+  }
+}
+
 function setSpeed(spd: number) {
   playbackRate.value = spd;
   if (videoRef.value) videoRef.value.playbackRate = spd;
@@ -225,9 +230,6 @@ function setSpeed(spd: number) {
   triggerOSD(`倍速: ${spd.toFixed(2)}x`);
 }
 
-// ==========================================
-// 5. 音量与全屏 (供父组件键盘调用的严格接口)
-// ==========================================
 function setVolume(v: number) {
   volume.value = Math.max(0, Math.min(1, v));
   if (videoRef.value) {
@@ -260,9 +262,6 @@ function handleFullscreenChange() {
   emit('fullscreenchange', isFullscreen.value);
 }
 
-// ==========================================
-// 6. UI 控制与拖拽
-// ==========================================
 function resetHideTimer() {
   showControls.value = true;
   if (hideControlsTimer) clearTimeout(hideControlsTimer);
@@ -284,7 +283,6 @@ function updateProgressByMouse(e: MouseEvent) {
   internalCurrentTime.value = percent * duration.value;
 }
 
-// 生命周期
 onMounted(() => document.addEventListener('fullscreenchange', handleFullscreenChange));
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -292,10 +290,12 @@ onUnmounted(() => {
   if (osdTimer) clearTimeout(osdTimer);
 });
 
-// 🌟 核心防报错设计：将严格类型的方法暴露给父组件，父组件无需碰触原生 DOM
 defineExpose({
   seekTo,
+  seekOffset,
   togglePlay,
+  play, // 🌟 将强制播放暴露出去
+  pause,
   toggleFullscreen,
   toggleMute,
   setSpeed,
@@ -305,10 +305,17 @@ defineExpose({
   triggerOSD,
   toggleDrawer
 });
+
+// 🌟 核心补齐：切源时物理清空进度缓冲
+watch(() => props.src, () => {
+  internalCurrentTime.value = 0;
+  duration.value = 0;
+  isPlaying.value = false;
+  showControls.value = true;
+});
 </script>
 
 <style scoped>
-/* 包含播放器特有的所有样式 */
 .player-card { background-color: #0f172a; border-color: #1e293b; transition: all 0.3s; position: relative; display: flex; flex-direction: column; width: 100%; height: 100%;}
 .video-wrapper { flex: 1; min-height: 0; background: transparent; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .video-wrapper.hide-cursor { cursor: none; }
@@ -355,7 +362,6 @@ defineExpose({
 .fade-fast-enter-active, .fade-fast-leave-active { transition: opacity 0.15s; }
 .fade-fast-enter-from, .fade-fast-leave-to { opacity: 0; transform: translateY(5px); }
 
-/* 全屏抽屉列表 */
 .fullscreen-drawer {
   position: absolute; top: 0; right: 0; bottom: 0; width: 300px; background: rgba(15,23,42,0.85); backdrop-filter: blur(10px);
   border-left: 1px solid #334155; display: flex; flex-direction: column; z-index: 30;
