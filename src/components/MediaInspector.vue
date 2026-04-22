@@ -297,7 +297,7 @@ async function startProbing(path: string) {
     isLoading.value = false;
   }
 }
-
+// 🌟 2. 修改单轨提取
 async function extractSingleTrack(track: any, type: 'audio' | 'subtitle') {
   executingTask.value = `${type}_${track.index}`;
   isError.value = false;
@@ -333,7 +333,7 @@ async function extractSingleTrack(track: any, type: 'audio' | 'subtitle') {
     isError.value = true; executionLog.value += `\n> [FATAL] 异常中断:\n${String(err)}`;
   } finally { executingTask.value = null; }
 }
-
+// 🌟 3. 修改一键分离所有音轨
 async function extractAllAudio() {
   if (!mediaInfo.value?.audio_streams.length) return;
   executingTask.value = 'all_audio'; isError.value = false;
@@ -348,7 +348,7 @@ async function extractAllAudio() {
     isError.value = true; executionLog.value += `\n> [FATAL] 引擎异常:\n${String(err)}`;
   } finally { executingTask.value = null; }
 }
-
+// 🌟 4. 修改提取纯净画面
 async function exportPureVideo() {
   if (!mediaInfo.value?.video_streams.length) return;
   executingTask.value = 'pure_video'; isError.value = false;

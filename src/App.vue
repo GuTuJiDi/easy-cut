@@ -1,5 +1,9 @@
 <template>
-  <div class="app-container">
+  <template v-if="isWidget">
+    <router-view />
+  </template>
+
+  <div v-else class="app-container">
     <aside class="sidebar" :class="{ 'is-collapsed': isCollapsed }">
       <div class="brand">
         <div class="logo-box">✂️</div>
@@ -46,6 +50,10 @@ import { useWorkspaceStore } from './stores/workspace';
 import { useSettingsStore } from './stores/settings';
 import { appModules } from './config/modules';
 import { useAuthStore } from './stores/auth'; // 🌟 1. 引入真实的授权仓库
+
+// 🌟 核心突破：摒弃所有可能存在延迟的 API，直接在 Setup 阶段读取浏览器底层地址栏！
+const isWidget = window.location.hash.includes('widget');
+
 const workspaceStore = useWorkspaceStore();
 const settingsStore = useSettingsStore();
 const isCollapsed = ref(false); // 控制侧边栏折叠状态
@@ -53,10 +61,14 @@ const authStore = useAuthStore(); // 🌟 2. 实例化授权仓库
 
 const mainModules = computed(() => appModules.filter(m => m.group === 'main'));
 const settingsModules = computed(() => appModules.filter(m => m.group === 'settings'));
+
 onMounted(() => {
-  authStore.silentVerify(); // 🌟 移到这里，最安全稳妥
-  workspaceStore.initWorkspace();
-  settingsStore.fetchSettings(); // 启动时全局拉取设置
+  // 如果是悬浮球，跳过主界面的沉重初始化逻辑，提升极速启动性能
+  if (!isWidget) {
+    authStore.silentVerify(); // 🌟 移到这里，最安全稳妥
+    workspaceStore.initWorkspace();
+    settingsStore.fetchSettings(); // 启动时全局拉取设置
+  }
 });
 </script>
 

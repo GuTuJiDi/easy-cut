@@ -435,7 +435,7 @@ pub fn plan_marker_splits(
         if duration <= 0.0 { continue; }
 
         let safe_label = sanitize_filename(&marker.label);
-
+        // 🧠 读取前端存入的信封数据 (Backward Compatibility 安全读取)
         let mut export_type = "master".to_string();
         let mut track_index = None;
 

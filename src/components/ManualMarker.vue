@@ -209,7 +209,27 @@
             </button>
           </div>
         </div>
-
+        <transition name="slide-up-fade">
+          <div class="external-inbox-bubble" v-if="externalMarkers.length > 0">
+            <div class="inbox-header">
+              <span class="icon">💡</span>
+              <span class="text">捕获 <strong>{{ externalMarkers.length }}</strong> 个伴随标记</span>
+              <button class="close-inbox-btn" @click="clearExternalMarkers" title="忽略清空">✖</button>
+            </div>
+            <div class="inbox-body">
+              <div class="ext-item" v-for="(em, i) in externalMarkers.slice(0, 2)" :key="i">
+                <span class="ext-time">{{ formatTime(em.timestamp) }}</span>
+                <span class="ext-label" :title="em.label">{{ em.label || '外部标记' }}</span>
+              </div>
+              <div v-if="externalMarkers.length > 2" class="ext-more">...及其他 {{ externalMarkers.length - 2 }} 个</div>
+            </div>
+            <div class="inbox-footer">
+              <button class="primary-btn mini-btn" @click="mergeExternalMarkers">
+                📥 一键整合到当前时间轴
+              </button>
+            </div>
+          </div>
+        </transition>
         <div class="list-footer" v-if="activeMarkers.length > 0">
           <button class="primary-btn export-btn" @click="exportMarkers" :disabled="isExporting">
             <span v-if="isExporting" class="spinner">⚙️</span>
@@ -273,11 +293,19 @@ import { ref, shallowRef, computed, onMounted, onUnmounted, watch, nextTick } fr
 import { useRoute, useRouter } from 'vue-router';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+// 🌟 1. 新增：引入 Tauri 的事件监听 API
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useAuthStore } from '../stores/auth';
 import EasyCutPlayer from './EasyCutPlayer.vue';
 import ExportResultModal from './ExportResultModal.vue';
 import { useSettingsStore } from '../stores/settings';
-
+// 🌟 2. 新增：外部打轴数据结构
+interface ExternalMarkerPayload {
+  source: string;
+  video_title?: string;
+  timestamp: number;
+  label?: string;
+}
 // 🌟 1. 找到并修改 Marker 接口，追加 payload 以承载我们的导出策略
 interface Marker {
   id: string;
@@ -327,7 +355,48 @@ function closeDropdowns() {
 }
 
 const markers = ref<Marker[]>([]);
+// ==========================================
+// 🌟 外部打轴收件箱逻辑
+// ==========================================
+const externalMarkers = ref<ExternalMarkerPayload[]>([]);
+let unlistenExternalMarker: UnlistenFn | null = null;
+
+// 一键合并外部数据到当前时间轴
+function mergeExternalMarkers() {
+  if (!externalMarkers.value.length || !videoPath.value) return;
+
+  let addedCount = 0;
+  externalMarkers.value.forEach(ext => {
+    // 安全边界：时间戳不能超过视频总长
+    const safeStart = Math.min(ext.timestamp, videoDurationSec.value || ext.timestamp);
+    // 智能推理：如果是外部单点打轴，默认给它 5 秒的出点时长（防溢出）
+    const safeEnd = Math.min(safeStart + 5.0, videoDurationSec.value || safeStart + 5.0);
+
+    markers.value.push({
+      id: Date.now().toString() + Math.random().toString().slice(2, 6),
+      startTime: Number(safeStart.toFixed(2)),
+      endTime: Number(safeEnd.toFixed(2)),
+      label: ext.label || '外部伴随标记',
+      is_deleted: false,
+      payload: { export_strategy: { type: 'master', target_audio_stream: 0 } }
+    });
+    addedCount++;
+  });
+
+  // 重新按时间排序，并存入撤销快照！
+  markers.value.sort((a, b) => a.startTime - b.startTime);
+  commitHistory();
+
+  externalMarkers.value = []; // 清空收件箱
+  playerRef.value?.triggerOSD(`📥 成功导入 ${addedCount} 个外部标记`);
+}
+
+function clearExternalMarkers() {
+  externalMarkers.value = [];
+}
+// ==========================================
 // 🌟 2. 在 setup 内部的顶层区域，新增 6 大语义字典和响应式状态
+// 🌟 1. 定义 6 大工业级切片语义字典
 const MARKER_TYPES = [
   { id: 'master', icon: '🎬', name: '源质混采' },
   { id: 'no_subs', icon: '🎞️', name: '剔除字幕' },
@@ -908,22 +977,29 @@ watch(() => route.query.loadVideo, (newPath) => {
   }
 }, { immediate: true });
 
-onMounted(() => {
+onMounted(async () => {
   isMounted.value = true;
   window.addEventListener('keydown', handleKeyDown);
-  document.addEventListener('click', closeDropdowns); // 👈 新增
+  document.addEventListener('click', closeDropdowns);
+
+  // 🌟 新增：监听后端发来的 "external-marker-received" 事件
+  unlistenExternalMarker = await listen<ExternalMarkerPayload>('external-marker-received', (event) => {
+    console.log('📥 收到底层外部打轴数据:', event.payload);
+    // 可选增强：判断 event.payload.video_title 是否匹配当前视频名称
+    externalMarkers.value.push(event.payload);
+  });
 });
-// 修改 ManualMarker.vue 的 onUnmounted：
+
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
-  document.removeEventListener('click', closeDropdowns); // 👈 新增
-  // 🌟 扫雷：清理幽灵定时器
+  document.removeEventListener('click', closeDropdowns);
   if (toastTimer) clearTimeout(toastTimer);
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
-
-  // 🌟 扫雷：强杀残留的全局拖拽事件
   document.removeEventListener('mousemove', onDragModal);
   document.removeEventListener('mouseup', stopDragModal);
+
+  // 🌟 新增：页面销毁时卸载监听，防内存泄漏
+  if (unlistenExternalMarker) unlistenExternalMarker();
 });
 
 // 列表内直接修改类型的函数 (带历史快照提交)
@@ -1253,4 +1329,36 @@ function editMarker(m: Marker) {
 /* 展开动画 */
 .expand-enter-active, .expand-leave-active { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); max-height: 50px; opacity: 1; overflow: hidden; }
 .expand-enter-from, .expand-leave-to { max-height: 0; opacity: 0; padding-top: 0; margin-top: 0; border-top-color: transparent; }
+/* ================= 🌟 外部打轴收件箱气泡 ================= */
+.external-inbox-bubble {
+  position: absolute;
+  bottom: 80px; /* 悬浮在导出按钮上方 */
+  right: 15px;
+  width: 290px;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(37, 99, 235, 0.15);
+  border: 1px solid #93c5fd;
+  overflow: hidden;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+
+.inbox-header {
+  background: #eff6ff; padding: 10px 14px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #bfdbfe;
+}
+.inbox-header .text { flex: 1; font-size: 0.85rem; color: #1e3a8a; }
+.close-inbox-btn { background: transparent; border: none; color: #60a5fa; cursor: pointer; transition: 0.2s; }
+.close-inbox-btn:hover { color: #ef4444; }
+
+.inbox-body { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.ext-item { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; background: #f8fafc; padding: 6px 10px; border-radius: 6px; border: 1px dashed #e2e8f0;}
+.ext-time { font-family: 'Consolas', monospace; color: #2563eb; font-weight: bold; }
+.ext-label { color: #475569; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.ext-more { font-size: 0.75rem; color: #94a3b8; text-align: center; margin-top: 4px;}
+
+.inbox-footer { padding: 10px 14px; background: #f8fafc; border-top: 1px solid #e2e8f0; }
+.mini-btn { width: 100%; padding: 8px; font-size: 0.85rem; background: #2563eb; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer;}
+.mini-btn:hover { background: #1d4ed8; }
 </style>

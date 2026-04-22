@@ -60,9 +60,9 @@ pub fn verify_license_internal(license_str: &str) -> Result<LicensePayload, Stri
     let signature_bytes = BASE64.decode(signature_b64).map_err(|_| "签名解析失败")?;
 
     // 3. 验证机器码是否匹配当前电脑 (防止一码多用)
-   /* let payload_json: LicensePayload =
-        serde_json::from_slice(&payload_bytes).map_err(|_| "授权数据损坏")?;
-*/
+    /* let payload_json: LicensePayload =
+         serde_json::from_slice(&payload_bytes).map_err(|_| "授权数据损坏")?;
+ */    
     /*let current_machine_id = machine_uid::get().unwrap_or_default();
     if payload_json.machine_id != current_machine_id {
         return Err("机器码不匹配！该激活码属于另一台设备。".to_string());
