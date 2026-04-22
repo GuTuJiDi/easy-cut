@@ -7,7 +7,7 @@ use crate::config_manager;
 use crate::marker_manager;
 use crate::auth;
 use crate::video_processor::{
-     AudioStreamDTO, SpecificAudioPayload, PureVideoPayload, MediaTask
+    AudioStreamDTO, SpecificAudioPayload, PureVideoPayload, MediaTask
 };
 // ==========================================
 // 1. 数据传输对象 (DTOs) - 严格定义每个工作流的入参
@@ -61,6 +61,8 @@ pub struct SingleExtractParams {
     pub expected_batch_path: Option<String>,
     pub fallback_output_dir: String,
     pub fallback_file_name: String,
+    pub export_type: String,         // 🌟 新增：接收前端传来的语义类型
+    pub track_index: Option<usize>,  // 🌟 新增：接收特定的音轨索引
 }
 
 
@@ -177,9 +179,12 @@ pub async fn run_marker_split(params: MarkerSplitParams) -> Result<video_process
     let video_stem = input_path_obj.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let extension = input_path_obj.extension().unwrap_or(std::ffi::OsStr::new("mp4")).to_string_lossy().to_string();
 
-    let target_dir = Path::new(&params.output_dir).join(format!("{}_标记导出", video_stem));
+    /*let target_dir = Path::new(&params.output_dir).join(format!("{}_标记导出", video_stem));
     fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建输出目录: {}", e))?;
-
+*/
+    // 👇 将其替换为更符合专业工作流的命名 👇
+    let target_dir = Path::new(&params.output_dir).join(format!("{}_素材包", video_stem));
+    fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建素材包目录: {}", e))?;
     // 3. 领域逻辑：规划打轴任务
     let tasks = video_processor::plan_marker_splits(
         Arc::clone(&input_arc), &target_dir, &video_stem, &extension, project.markers
@@ -214,12 +219,14 @@ pub async fn extract_single_segment(params: SingleExtractParams) -> Result<Strin
         return Ok(out_path_str); // 文件已存在，耗时0ms直接复用！
     }
 
-    // 3. 如果都不存在，正式调用物理切片提取
-    let task = video_processor::MediaTask::Split(video_processor::SplitPayload {
+    // 🌟 3. 核心修复：如果都不存在，正式调用物理切片提取 (改为使用全新的多态执行器)
+    let task = video_processor::MediaTask::ExportMarker(video_processor::MarkerExportPayload {
         start_time: params.start_time,
         duration: params.end_time - params.start_time,
         input_path: Arc::new(params.video_path),
         output_path: out_path_str.clone(),
+        export_type: params.export_type, // 👈 动态应用前端传来的策略
+        track_index: params.track_index, // 👈 动态应用目标音轨
     });
 
     video_processor::execute_media_task_async(&task).await?;
@@ -305,8 +312,14 @@ pub async fn run_extract_all_audio(params: AutoExtractAudioParams) -> Result<Str
 
     for stream in params.audio_streams {
         // 动态适配后缀
+        // 动态适配后缀
         let ext = match stream.codec.as_str() {
-            "aac" => "m4a", "ac3" => "ac3", "wav" => "wav", "mp3" => "mp3", _ => "m4a"
+            "aac" => "m4a",
+            "eac3" => "eac3", // 👈 新增 EAC3 支持
+            "ac3" => "ac3",
+            "wav" => "wav",
+            "mp3" => "mp3",
+            _ => "mka" // 👈 兜底改为万能的 mka
         };
         // 生成如：VideoName_Track1_chi.m4a
         let out_name = format!("{}_Track{}_{}.{}", video_stem, stream.index, stream.language, ext);

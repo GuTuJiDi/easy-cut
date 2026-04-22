@@ -15,6 +15,11 @@ const routes: RouteRecordRaw[] = [
         path: '/',
         redirect: appModules.find(m => !m.disabled)?.path || '/split'
     },
+    {
+        path: '/widget',
+        name: 'Widget',
+        component: () => import('../views/WidgetView.vue'), // 专门的悬浮球组件
+    },
     ...dynamicRoutes
 ];
 

@@ -22,24 +22,35 @@
 
         <div class="modal-body custom-scrollbar">
           <div class="list-container">
-            <div class="list-row" v-for="(item, index) in parsedLogs" :key="index">
-              <div class="row-left">
-                <span class="check-mark">✓</span>
-                <span class="row-idx">{{ (index + 1).toString().padStart(2, '0') }}</span>
-                <span class="row-filename" :title="item.fullPath">{{ item.filename }}</span>
+            <div class="folder-group" v-for="(items, folderName) in groupedLogs" :key="folderName">
+
+              <div class="folder-header">
+                <span class="folder-icon">📂</span>
+                <span class="folder-name">{{ folderName }}</span>
+                <span class="folder-count">{{ items.length }} 个素材</span>
               </div>
 
-              <div class="row-right">
-                <button class="action-btn split-btn" @click="goToWorkflow(item.fullPath, '/split')" title="将此片段导入基础分割">
-                  ✂️ 分割
-                </button>
-                <button class="action-btn marker-btn" @click="goToWorkflow(item.fullPath, '/marker')" title="将此片段导入打轴标记">
-                  🏷️ 打轴
-                </button>
-                <button class="action-btn play-btn" @click="playSegment(item.fullPath)" title="调用系统播放器预览">
-                  ▶ 预览
-                </button>
+              <div class="list-row file-row" v-for="(item, index) in items" :key="item.fullPath">
+                <div class="row-left">
+                  <span class="file-tree-line">└─</span>
+                  <span class="check-mark">✓</span>
+                  <span class="row-idx">{{ (index + 1).toString().padStart(2, '0') }}</span>
+                  <span class="row-filename" :title="item.fullPath">{{ item.filename }}</span>
+                </div>
+
+                <div class="row-right">
+                  <button class="action-btn split-btn" @click="goToWorkflow(item.fullPath, '/split')" title="将此片段导入基础分割">
+                    ✂️ 分割
+                  </button>
+                  <button class="action-btn marker-btn" @click="goToWorkflow(item.fullPath, '/marker')" title="将此片段导入打轴标记">
+                    🏷️ 打轴
+                  </button>
+                  <button class="action-btn play-btn" @click="playSegment(item.fullPath)" title="调用系统播放器预览">
+                    ▶ 预览
+                  </button>
+                </div>
               </div>
+
             </div>
           </div>
         </div>
@@ -90,7 +101,33 @@ const parsedLogs = computed(() => {
         return { fullPath, filename };
       });
 });
+// 🌟 新增：基于 parsedLogs，将一维数组转换为按文件夹分组的树状对象字典
+const groupedLogs = computed(() => {
+  if (!parsedLogs.value.length) return {};
 
+  const groups: Record<string, typeof parsedLogs.value> = {};
+
+  parsedLogs.value.forEach(item => {
+    // 兼容 Win/Mac 路径，获取父文件夹名 (例如: 01_Master_Clips)
+    const parts = item.fullPath.replace(/\\/g, '/').split('/');
+    parts.pop(); // 弹出文件名
+    const folderName = parts.pop() || '00_Uncategorized';
+
+    if (!groups[folderName]) {
+      groups[folderName] = [];
+    }
+    groups[folderName].push(item);
+  });
+
+  // 按文件夹名字母顺序排序，确保 01, 02, 03... 顺序稳定
+  const sortedKeys = Object.keys(groups).sort();
+  const sortedGroups: Record<string, typeof parsedLogs.value> = {};
+  sortedKeys.forEach(key => {
+    sortedGroups[key] = groups[key];
+  });
+
+  return sortedGroups;
+});
 // 🌟 核心逻辑：工作流无缝跳转
 function goToWorkflow(targetPath: string, routePath: string) {
   close(); // 先优雅地关闭当前成功弹窗
@@ -205,5 +242,53 @@ async function playSegment(path: string) {
 @keyframes modalPopOut {
   0% { opacity: 1; transform: scale(1) translateY(0); }
   100% { opacity: 0; transform: scale(0.95) translateY(10px); }
+}
+/* ================= 🌟 智能分组树状视图样式 ================= */
+.folder-group {
+  border-bottom: 1px solid #e2e8f0;
+}
+.folder-group:last-child {
+  border-bottom: none;
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  background: #f8fafc;
+  border-bottom: 1px solid #f1f5f9;
+  gap: 8px;
+}
+
+.folder-icon { font-size: 1.1rem; }
+.folder-name {
+  font-weight: 700;
+  color: #334155;
+  font-size: 0.9rem;
+  font-family: 'Consolas', monospace;
+}
+.folder-count {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-left: auto;
+  font-weight: 600;
+  background: #e2e8f0;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.file-row {
+  padding-left: 20px; /* 让文件有向内缩进的树状视觉 */
+  border-bottom: 1px solid #f1f5f9;
+}
+.file-row:last-child {
+  border-bottom: none;
+}
+
+.file-tree-line {
+  color: #cbd5e1;
+  font-family: monospace;
+  margin-right: 6px;
+  user-select: none;
 }
 </style>
