@@ -1,8 +1,7 @@
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Emitter};
+use tauri::{State,AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Emitter};
 use tokio::sync::Mutex;
 use std::time::Instant;
-use crate::ExternalMarkerPayload; // 复用我们在 Phase 1 定义的数据契约
-
+use crate::{auth, ExternalMarkerPayload}; // 复用我们在 Phase 1 定义的数据契约
 // 🌟 双模式状态机：记录秒表启动的时间点
 pub struct WidgetState {
     pub stopwatch_start: Mutex<Option<Instant>>,
@@ -71,6 +70,13 @@ pub async fn toggle_widget(app: AppHandle) -> Result<String, String> {
 
 /// 全局快捷键触发的核心业务逻辑
 pub fn handle_global_shortcut(app: &AppHandle) {
+    let guardian = app.state::<auth::SecurityGuardian>();
+    let is_pro = guardian.is_pro.lock().unwrap();
+
+    if !*is_pro {
+        println!("⚠️ 快捷键拦截：未激活 PRO 状态，忽略指令。");
+        return;
+    }
     let app_clone = app.clone();
 
     tauri::async_runtime::spawn(async move {
@@ -100,4 +106,17 @@ pub fn handle_global_shortcut(app: &AppHandle) {
             println!("⚠️ 悬浮球处于隐藏/关闭状态，快捷键请求已忽略");
         }
     });
+}
+
+#[tauri::command]
+pub async fn toggle_widget_safe_v(
+    app: AppHandle,
+    guardian: State<'_, auth::SecurityGuardian>,
+    session_token: String
+) -> Result<String, String> {
+    // 🌟 零信任门禁：必须令牌匹配且为 PRO 状态
+    auth::check_pro_gate(&guardian, &session_token)?;
+
+    // 逻辑通过后，才执行原有的 toggle 逻辑
+    toggle_widget(app).await
 }

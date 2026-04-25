@@ -1,5 +1,5 @@
 <template>
-  <template v-if="isWidget">
+  <template v-if="authStore.isWidget">
     <router-view />
   </template>
 
@@ -52,7 +52,7 @@ import { appModules } from './config/modules';
 import { useAuthStore } from './stores/auth'; // 🌟 1. 引入真实的授权仓库
 
 // 🌟 核心突破：摒弃所有可能存在延迟的 API，直接在 Setup 阶段读取浏览器底层地址栏！
-const isWidget = window.location.hash.includes('widget');
+// const isWidget = window.location.hash.includes('widget');
 
 const workspaceStore = useWorkspaceStore();
 const settingsStore = useSettingsStore();
@@ -61,14 +61,31 @@ const authStore = useAuthStore(); // 🌟 2. 实例化授权仓库
 
 const mainModules = computed(() => appModules.filter(m => m.group === 'main'));
 const settingsModules = computed(() => appModules.filter(m => m.group === 'settings'));
+// let isWidget = window.location.hash.includes('widget');
+onMounted(async () => {
+  // 1. 🛡️ 铁穹第一步：建立安全会话 (最高优先级)
+  // 必须拿到 sessionToken，否则后续所有调用都会被后端熔断拦截
+  await authStore.initSecureSession();
 
-onMounted(() => {
-  // 如果是悬浮球，跳过主界面的沉重初始化逻辑，提升极速启动性能
-  if (!isWidget) {
-    authStore.silentVerify(); // 🌟 移到这里，最安全稳妥
-    workspaceStore.initWorkspace();
-    settingsStore.fetchSettings(); // 启动时全局拉取设置
+  // 2. 🛡️ 铁穹第二步：环境初始化 (仅在主窗口模式下)
+  if (!authStore.isWidget) {
+    try {
+      // 🌟 防御性检查：如果工作区尚未加载，执行加载
+      if (!workspaceStore.currentWorkspace) {
+        await workspaceStore.initWorkspace();
+      }
+
+      // 同步用户偏好设置 (如自动保存开关、并发数等)
+      await settingsStore.fetchSettings();
+
+      console.log("🚀 EasyCut 全局环境引导完成");
+    } catch (e) {
+      console.error("环境引导失败，系统将尝试降级运行:", e);
+    }
   }
+
+  // 3. 🛡️ 释放渲染大门
+  authStore.isInitialized = true;
 });
 </script>
 

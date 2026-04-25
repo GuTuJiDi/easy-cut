@@ -66,14 +66,20 @@ function handleAITabClick() {
 }
 
 // 🌟 调用 Rust 后端开关指令
-async function handleToggleWidget() {
+const handleToggleWidget = async () => {
   try {
-    const status = await invoke<string>('toggle_widget');
-    isWidgetOpen.value = (status === 'opened');
-  } catch (err) {
-    console.error("悬浮球操作失败:", err);
+    // 🛡️ 铁穹架构：调用重构后的安全版指令，必须携带 sessionToken
+    // 后端如果检测到 Token 不匹配或非 PRO 状态，将直接熔断执行
+    const res = await invoke<string>('toggle_widget_safe', {
+      sessionToken: authStore.sessionToken
+    });
+    isWidgetOpen.value = (res === 'opened');
+  } catch (e) {
+    // 捕获权限拦截报错并给用户友好提示
+    console.error("铁穹拦截：", e);
+    alert(e);
   }
-}
+};
 
 onMounted(async () => {
   // 🌟 监听 Rust 发来的窗口状态变更

@@ -1,11 +1,12 @@
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-
+use tauri::State;
 use crate::video_processor;
 use crate::config_manager;
 use crate::marker_manager;
 use crate::auth;
+use crate::auth::SecurityGuardian;
 use crate::video_processor::{
     AudioStreamDTO, SpecificAudioPayload, PureVideoPayload, MediaTask
 };
@@ -21,7 +22,7 @@ pub struct AudioExtractParams {
     // pub bitrate: String,
     pub start_time: f64,
     pub duration: f64,
-    pub license_str: String, // 🛡️ 强制大闸凭证
+    // pub license_str: String, // 🛡️ 强制大闸凭证
 }
 
 // 🌟 视频格式转换入参 (PRO)
@@ -30,7 +31,7 @@ pub struct FormatConvertParams {
     pub input_path: String,
     pub output_dir: String,
     pub output_name: String, // 必须带有目标扩展名，如 .mkv
-    pub license_str: String, // 🛡️ 强制大闸凭证
+    // pub license_str: String, // 🛡️ 强制大闸凭证
 }
 
 #[derive(serde::Deserialize)]
@@ -50,7 +51,7 @@ pub struct CountSplitParams {
     pub segment_count: usize,
     pub max_concurrent_tasks: usize,
     // 🛡️ PRO 专属标识：必须携带激活码！
-    pub license_str: String,
+    // pub license_str: String,
 }
 // 单片段提取入参结构体
 #[derive(serde::Deserialize)]
@@ -91,7 +92,10 @@ pub struct PureVideoParams {
 // ==========================================
 
 /// 🟢 基础免费工作流：固定时长分割
-pub async fn run_duration_split(params: DurationSplitParams) -> Result<String, String> {
+pub async fn run_duration_split(
+    params: DurationSplitParams,
+    guardian: &State<'_, SecurityGuardian> // 👈 注入锁以判定免费/付费身份
+) -> Result<String, String> {
     // 1. IO 与元数据准备
     let total_duration = video_processor::get_video_duration(&params.input_path).await?;
     let target_folder = Path::new(&params.output_dir).join(&params.video_name);
@@ -105,15 +109,21 @@ pub async fn run_duration_split(params: DurationSplitParams) -> Result<String, S
     );
 
     // 3. 驱动底层并发引擎
-    let logs = video_processor::run_concurrent_tasks(tasks, params.max_concurrent_tasks).await;
+    // 🚀 计算安全并发：即使是免费版的功能，如果用户没买 PRO，并发也会被压到 1
+    let final_concurrency = resolve_safe_concurrency(params.max_concurrent_tasks, guardian);
+    let logs = video_processor::run_concurrent_tasks(tasks, final_concurrency).await;
     Ok(logs.join("\n"))
 }
 
 /// 👑 旗舰 PRO 工作流：固定数量分割 (自带商业大闸)
-pub async fn run_count_split(params: CountSplitParams) -> Result<String, String> {
-    // 🛡️ 商业防线：进门先查票！黑客绕不过这段 Rust 原生校验。
-    let _payload = auth::verify_license_internal(&params.license_str)
-        .map_err(|e| format!("🚨 核心授权拦截：未激活 PRO 版本 ({})", e))?;
+/// /// 现在接收 SecurityGuardian 引用和 session_token 进行零信任校验
+pub async fn run_count_split(
+    params: CountSplitParams,
+    guardian: &State<'_, SecurityGuardian>, // 注入安全守护者
+    token: &str                        // 注入前端传来的令牌
+) -> Result<String, String> {
+    // 🛡️ 铁穹门禁：内核级校验令牌与 PRO 状态
+    auth::check_pro_gate(guardian, token)?;
 
     // 1. IO 与元数据准备
     let total_duration = video_processor::get_video_duration(&params.input_path).await?;
@@ -141,12 +151,20 @@ pub async fn run_count_split(params: CountSplitParams) -> Result<String, String>
     }
 
     // 3. 驱动底层并发引擎
-    let logs = video_processor::run_concurrent_tasks(tasks, params.max_concurrent_tasks).await;
+    // 之前是硬编码 4 线程，现在走智能裁决 (假设前端没有传设置的并发数，默认给最大能力)
+    let hardware_max = num_cpus::get();
+    let final_concurrency = resolve_safe_concurrency(hardware_max, guardian);
+
+    let logs = video_processor::run_concurrent_tasks(tasks, final_concurrency).await;
     Ok(logs.join("\n"))
 }
 
 /// 🟢/👑 混合工作流：智能打轴导出
-pub async fn run_marker_split(params: MarkerSplitParams) -> Result<video_processor::ExportResult, String> {
+pub async fn run_marker_split(
+    params: MarkerSplitParams,
+    guardian: &State<'_, SecurityGuardian>, // 👈 必须强制注入内核锁
+    session_token: &str                     // 👈 必须强制注入令牌
+) -> Result<video_processor::ExportResult, String> {
     // 1. 数据读取
     let storage_dir = config_manager::get_markers_dir();
     // 🌟 修复：补上 .await 等待异步结果
@@ -160,16 +178,9 @@ pub async fn run_marker_split(params: MarkerSplitParams) -> Result<video_process
     // 🌟 修复：补齐打轴商业化大闸
     let marker_count = project.markers.len();
     if marker_count > 5 {
-        let is_pro = match &params.license_str {
-            Some(key) => auth::verify_license_internal(key).is_ok(),
-            None => false,
-        };
-
-        if !is_pro {
-            return Err(format!(
-                "🚨 免费版单次最多支持导出 5 个片段（当前: {}）。请升级 PRO 旗舰版解锁无限制并发导出！",
-                marker_count
-            ));
+        // 🛡️ 彻底抛弃 params.license_str，走铁穹统一大闸！
+        if let Err(_) = auth::check_pro_gate(guardian, session_token) {
+            return Err(format!("🚨 免费版单次最多支持导出 5 个片段（当前: {}）。请升级 PRO 旗舰版！", marker_count));
         }
     }
     // 2. IO 与元数据准备
@@ -191,9 +202,10 @@ pub async fn run_marker_split(params: MarkerSplitParams) -> Result<video_process
     );
 
     // 4. 驱动底层并发引擎
-    let task_count = tasks.len();
-    let mut logs = video_processor::run_concurrent_tasks(tasks, params.max_concurrent_tasks).await;
-    logs.insert(0, format!("🚀 引擎启动：成功并发处理 {} 个片段...", task_count));
+    // 🚀 降维打击介入：计算真实安全并发数
+    let final_concurrency = resolve_safe_concurrency(params.max_concurrent_tasks, guardian);
+    let mut logs = video_processor::run_concurrent_tasks(tasks, final_concurrency).await;
+    logs.insert(0, format!("🚀 引擎启动：已分配 {} 个核心进行并发处理...", final_concurrency));
 
     Ok(video_processor::ExportResult {
         logs: logs.join("\n"),
@@ -234,10 +246,13 @@ pub async fn extract_single_segment(params: SingleExtractParams) -> Result<Strin
 }
 
 /// 👑 旗舰 PRO 工作流：音频极速分离 (智能探针版)
-pub async fn run_audio_extract(params: AudioExtractParams) -> Result<String, String> {
-    // 🛡️ 商业防线：查票！
-    let _payload = auth::verify_license_internal(&params.license_str)
-        .map_err(|e| format!("🚨 音频分离授权拦截：未激活 PRO 版本 ({})", e))?;
+pub async fn run_audio_extract(
+    params: AudioExtractParams,
+    guardian: &State<'_, SecurityGuardian>,
+    token: &str
+) -> Result<String, String> {
+    // 🛡️ 铁穹门禁
+    auth::check_pro_gate(guardian, token)?;
 
     let target_folder = Path::new(&params.output_dir);
     fs::create_dir_all(&target_folder).map_err(|e| format!("IO错误: {}", e))?;
@@ -274,10 +289,13 @@ pub async fn run_audio_extract(params: AudioExtractParams) -> Result<String, Str
     Ok(logs.join("\n"))
 }
 /// 👑 旗舰 PRO 工作流：视频格式转换
-pub async fn run_format_convert(params: FormatConvertParams) -> Result<String, String> {
-    // 🛡️ 商业防线：查票！
-    let _payload = auth::verify_license_internal(&params.license_str)
-        .map_err(|e| format!("🚨 格式转换授权拦截：未激活 PRO 版本 ({})", e))?;
+pub async fn run_format_convert(
+    params: FormatConvertParams,
+    guardian: &State<'_, SecurityGuardian>,
+    token: &str
+) -> Result<String, String> {
+    // 🛡️ 铁穹门禁
+    auth::check_pro_gate(guardian, token)?;
 
     let target_folder = Path::new(&params.output_dir);
     fs::create_dir_all(&target_folder).map_err(|e| format!("IO错误: {}", e))?;
@@ -301,7 +319,14 @@ pub async fn run_format_convert(params: FormatConvertParams) -> Result<String, S
 
 
 /// 🚀 自动化脚本 1：一键分离所有音轨
-pub async fn run_extract_all_audio(params: AutoExtractAudioParams) -> Result<String, String> {
+pub async fn run_extract_all_audio(
+    params: AutoExtractAudioParams,
+    guardian: &State<'_, SecurityGuardian> ,// 👈 增加参数
+    session_token: &str // 👈 必须接收令牌
+) -> Result<String, String> {
+    // 🛡️ 铁穹门禁：第一行必须查票！
+    auth::check_pro_gate(guardian, session_token)?;
+    
     let target_folder = Path::new(&params.output_dir);
     std::fs::create_dir_all(&target_folder).map_err(|e| e.to_string())?;
 
@@ -333,12 +358,23 @@ pub async fn run_extract_all_audio(params: AutoExtractAudioParams) -> Result<Str
     }
 
     // 满载并发执行（假设 4 线程）
-    let logs = video_processor::run_concurrent_tasks(tasks, 4).await;
+    // 之前是硬编码 4 线程，现在走智能裁决 (假设前端没有传设置的并发数，默认给最大能力)
+    let hardware_max = num_cpus::get();
+    let final_concurrency = resolve_safe_concurrency(hardware_max, guardian);
+
+    let logs = video_processor::run_concurrent_tasks(tasks, final_concurrency).await;
     Ok(logs.join("\n"))
 }
 
 /// 🚀 自动化脚本 2：一键剥离出纯视频
-pub async fn run_export_pure_video(params: PureVideoParams) -> Result<String, String> {
+pub async fn run_export_pure_video(
+    params: PureVideoParams,
+    guardian: &State<'_, SecurityGuardian>, // 👈 必须强制注入内核锁
+    session_token: &str                     // 👈 必须强制注入动态令牌
+) -> Result<String, String> {
+    // 1. 🛡️ 铁穹大闸：零信任校验，绝杀一切绕过尝试
+    auth::check_pro_gate(guardian, session_token)?;
+
     let target_folder = Path::new(&params.output_dir);
     std::fs::create_dir_all(&target_folder).map_err(|e| e.to_string())?;
 
@@ -354,6 +390,25 @@ pub async fn run_export_pure_video(params: PureVideoParams) -> Result<String, St
         output_path: out_path,
     });
 
-    let logs = video_processor::run_concurrent_tasks(vec![task], 1).await;
+    // 2. 🚀 动态降维：获取安全并发数
+    // 因为一键剥离单视频只有一个任务，所以请求的并发数 (requested) 传入 1 即可
+    let final_concurrency = resolve_safe_concurrency(1, guardian);
+
+    // 3. 执行底层任务
+    let logs = video_processor::run_concurrent_tasks(vec![task], final_concurrency).await;
     Ok(logs.join("\n"))
+}
+
+// 🛡️ 核心引擎：智能并发裁决器
+fn resolve_safe_concurrency(requested: usize, guardian: &State<'_, SecurityGuardian>) -> usize {
+    let is_pro = *guardian.is_pro.lock().unwrap();
+    let hardware_max = num_cpus::get(); // 获取用户电脑真实的逻辑核心数
+
+    if !is_pro {
+        // 免费版降维打击：无论传多少，死锁在 1 个线程
+        1
+    } else {
+        // 旗舰版：尊重用户设置，但绝对不能超过硬件极限，防止死机
+        requested.clamp(1, hardware_max)
+    }
 }

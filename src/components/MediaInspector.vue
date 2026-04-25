@@ -8,14 +8,22 @@
     </header>
 
     <div class="main-layout">
-      <div class="split-layout">
+      <div v-if="!authStore.isPro" class="pro-lock-overlay">
+        <div class="lock-content">
+          <span class="lock-icon">🔒</span>
+          <h2>专属功能已锁定</h2>
+          <p>“高级轨道探测与分离”为 PRO 旗舰版专属权益。<br>请前往授权中心输入激活码解锁该功能。</p>
+          <button class="primary-btn" @click="$router.push('/auth')">前往授权中心</button>
+        </div>
+      </div>
+      <div v-else class="split-layout">
 
         <aside class="left-panel custom-scrollbar">
 
           <div class="panel-card source-card">
             <h3 class="panel-title">1. 选择探测源</h3>
 
-            <div v-if="!mediaInfo && !isLoading"
+            <div v-if="authStore.isInitialized &&!mediaInfo && !isLoading"
                  class="upload-dropzone"
                  :class="{ 'is-dragover': isDragging }"
                  @click="triggerFileSelect"
@@ -26,7 +34,7 @@
               <p class="dropzone-text">点击或拖拽选择视频</p>
             </div>
 
-            <div v-if="isLoading" class="loading-state">
+            <div v-if="!authStore.isInitialized" class="loading-state">
               <div class="spinner-small blue"></div>
               <span>正在嗅探底层流...</span>
             </div>
@@ -193,7 +201,10 @@
 import { ref, computed, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-
+import { useAuthStore } from '../stores/auth'; // 引入 Store
+// 🌟 引入 Tauri 官方路径处理 API，替代脆弱的字符串操作
+import { dirname } from '@tauri-apps/api/path';
+const authStore = useAuthStore();
 // 状态管理
 const isDragging = ref(false);
 const isLoading = ref(false);
@@ -204,7 +215,8 @@ const mediaInfo = ref<any>(null);
 const filePath = ref('');
 const outputDir = ref('');
 const executionLog = ref('');
-
+// 🌟 安全优化：合法的视频后缀白名单
+const VALID_EXTENSIONS = ['.mp4', '.mkv', '.mov', '.avi', '.flv', '.ts', '.webm'];
 // 任务耗时追踪逻辑
 const taskCostTime = ref('0.0');
 let timerInterval: number | null = null;
@@ -260,9 +272,18 @@ async function handleDrop(e: DragEvent) {
   isDragging.value = false;
   const file = e.dataTransfer?.files[0];
   if (file) {
-    const realPath = (file as any).path;
-    if (realPath) startProbing(realPath);
-    else alert("无法获取本地绝对路径，请点击按钮选择文件。");
+    const realPath = (file as any).path as string;
+    if (!realPath) {
+      alert("无法获取本地绝对路径，请点击按钮选择文件。");
+      return;
+    }
+    // 🌟 安全防御：校验拖拽文件的后缀，防止恶意文件注入底层 FFmpeg
+    const isVideo = VALID_EXTENSIONS.some(ext => realPath.toLowerCase().endsWith(ext));
+    if (!isVideo) {
+      alert("不支持的文件格式，请拖入有效的视频文件！");
+      return;
+    }
+    startProbing(realPath);
   }
 }
 
@@ -285,12 +306,15 @@ async function openTargetFolder() {
 
 async function startProbing(path: string) {
   isLoading.value = true; executionLog.value = ''; isError.value = false; filePath.value = path; taskCostTime.value = '0.0';
-  const pathParts = path.replace(/\\/g, '/').split('/');
-  pathParts.pop();
-  outputDir.value = pathParts.join(navigator.platform.includes('Win') ? '\\' : '/');
 
   try {
-    mediaInfo.value = await invoke('probe_media_info_cmd', { videoPath: path });
+    // 🌟 健壮性优化：使用官方跨平台 API 获取安全的父级目录
+    outputDir.value = await dirname(path);
+
+    mediaInfo.value = await invoke('probe_media_info_cmd', {
+      videoPath: path,
+      sessionToken: authStore.sessionToken // 这个你之前加了，保持即可
+    });
   } catch (err) {
     alert(`探测失败: ${err}`); resetInspector();
   } finally {
@@ -298,6 +322,7 @@ async function startProbing(path: string) {
   }
 }
 // 🌟 2. 修改单轨提取
+// 🌟 铁穹接入：修复所有的 invoke 调用，补齐 sessionToken
 async function extractSingleTrack(track: any, type: 'audio' | 'subtitle') {
   executingTask.value = `${type}_${track.index}`;
   isError.value = false;
@@ -326,7 +351,8 @@ async function extractSingleTrack(track: any, type: 'audio' | 'subtitle') {
         video_path: filePath.value, start_time: 0, end_time: mediaInfo.value.duration_sec,
         expected_batch_path: null, fallback_output_dir: outputDir.value, fallback_file_name: outName,
         export_type: type === 'audio' ? 'audio_only' : 'subs_only', track_index: track.index
-      }
+      },
+      sessionToken: authStore.sessionToken // 🛡️ 补齐令牌
     });
     executionLog.value += `\n> [OK] 提取成功: ${res}`;
   } catch (err) {
@@ -341,7 +367,8 @@ async function extractAllAudio() {
 
   try {
     const res = await invoke('run_extract_all_audio_cmd', {
-      params: { input_path: filePath.value, output_dir: outputDir.value, audio_streams: mediaInfo.value.audio_streams }
+      params: { input_path: filePath.value, output_dir: outputDir.value, audio_streams: mediaInfo.value.audio_streams },
+      sessionToken: authStore.sessionToken // 🛡️ 补齐令牌
     });
     executionLog.value += `\n> [OK] 批量分离完成:\n${res}`;
   } catch (err) {
@@ -356,7 +383,8 @@ async function exportPureVideo() {
 
   try {
     const res = await invoke('run_export_pure_video_cmd', {
-      params: { input_path: filePath.value, output_dir: outputDir.value }
+      params: { input_path: filePath.value, output_dir: outputDir.value },
+      sessionToken: authStore.sessionToken // 🛡️ 补齐令牌
     });
     executionLog.value += `\n> [OK] 封装完成:\n${res}`;
   } catch (err) {
@@ -512,4 +540,17 @@ async function exportPureVideo() {
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ================= PRO 锁定遮罩 ================= */
+.pro-lock-overlay {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  background: rgba(248, 250, 252, 0.8); border-radius: 12px; backdrop-filter: blur(4px);
+}
+.lock-content {
+  text-align: center; background: white; padding: 3rem; border-radius: 16px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;
+}
+.lock-icon { font-size: 4rem; display: block; margin-bottom: 1rem; }
+.lock-content h2 { color: #0f172a; margin-bottom: 0.5rem; }
+.lock-content p { color: #64748b; font-size: 0.95rem; line-height: 1.6; margin-bottom: 2rem; }
 </style>

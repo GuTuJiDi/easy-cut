@@ -899,7 +899,7 @@ async function exportMarkers() {
   const startTime = performance.now();
   try {
     const result = await invoke<{ logs: string, target_dir: string }>('execute_marker_split_task', {
-      params: { video_path: videoPath.value, output_dir: outDir, max_concurrent_tasks: settingsStore.maxConcurrentTasks, license_str: authStore.isPro ? authStore.licenseKey : null }
+      params: { video_path: videoPath.value, output_dir: outDir, max_concurrent_tasks: settingsStore.maxConcurrentTasks, license_str: authStore.isPro ? authStore.sessionToken : null }
     });
     exportCostTime.value = ((performance.now() - startTime) / 1000).toFixed(1);
     exportLogs.value = result.logs; finalExportDir.value = result.target_dir; showExportModal.value = true;

@@ -239,8 +239,9 @@ async function runExtract() {
         output_dir: params.value.outputDir,
         start_time: params.value.startTime,
         duration: params.value.duration,
-        license_str: authStore.licenseKey
-      }
+        // license_str: authStore.licenseKey
+      },
+      sessionToken: authStore.sessionToken,
     });
     resultLog.value = res;
   }catch (error) {

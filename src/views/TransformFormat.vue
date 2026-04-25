@@ -216,8 +216,9 @@ async function runConvert() {
         input_path: params.value.inputPath,
         output_dir: params.value.outputDir,
         output_name: params.value.outputName,
-        license_str: authStore.licenseKey // 🛡️ 商业大闸
-      }
+        // license_str: authStore.licenseKey // 🛡️ 商业大闸
+      },
+      sessionToken: authStore.sessionToken,
     });
     resultLog.value = res;
   } catch (error) {

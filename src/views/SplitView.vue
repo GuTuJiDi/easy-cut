@@ -205,9 +205,10 @@ import { ref, computed, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useRouter,useRoute } from 'vue-router';
-
+import { handleSecurityBreach } from '../utils/securityGuard';
 import { useSettingsStore } from '../stores/settings';
 import { useAuthStore } from '../stores/auth';
+import { showToast } from '../utils/toast';
 const settingsStore = useSettingsStore();
 const authStore = useAuthStore();
 const router = useRouter();
@@ -232,6 +233,11 @@ watch(
         try {
           videoDurationSec.value = await invoke<number>('get_video_duration_cmd', { videoPath: newPath });
         } catch (e) {
+          // 1. 优先执行安全熔断检查
+          if (await handleSecurityBreach(e)) return;
+
+          // 2. 如果不是安全问题，走正常业务报错弹窗
+          showToast(`任务失败: ${e}`, 'error');
           console.error("无法获取新片段时长", e);
         }
 
@@ -241,6 +247,7 @@ watch(
     },
     { immediate: true }
 );
+
 const isProcessing = ref(false);
 const processLogs = ref('');
 const resultLogs = ref<string[]>([]);
@@ -395,8 +402,9 @@ async function runBatchSplit() {
           video_name: batchParams.value.videoName,
           segment_count: Number(batchParams.value.segmentCount),
           max_concurrent_tasks: settingsStore.maxConcurrentTasks,
-          license_str: authStore.licenseKey
-        }
+          // license_str: authStore.licenseKey
+        },
+        sessionToken: authStore.sessionToken
       });
     }
 
@@ -408,6 +416,8 @@ async function runBatchSplit() {
     resultLogs.value = [`${error}`];
     isError.value = true;
     console.error("切割失败:", error);
+    // 🌟 加上弹窗，让 Rust 的报错直接显示在屏幕上！
+    alert(`任务失败被拦截: ${error}`);
     if (String(error).includes("核心授权拦截")) {
       alert("该功能为 PRO 旗舰版专属，请前往全局设置绑定设备授权！");
     }
