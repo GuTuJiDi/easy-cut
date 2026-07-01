@@ -1,0 +1,16 @@
+{
+  "identifier": "widget-permissions",
+  "description": "赋予桌面悬浮球窗口底层操作系统的交互权限",
+  "windows": [
+    "widget"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
+    "core:window:allow-set-shadow",
+    "core:window:allow-set-decorations"
+  ]
+}
